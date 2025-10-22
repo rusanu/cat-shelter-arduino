@@ -122,8 +122,13 @@ void loadBootState() {
   bootAttempts = preferences.getInt("bootAttempts", 0);
   safeMode = preferences.getBool("safeMode", false);
 
-  Serial.printf("Boot state: attempts=%d, safeMode=%s\n",
-                bootAttempts, safeMode ? "YES" : "NO");
+  logPrintf(LOG_INFO, "Boot state: attempts=%d/%d, safeMode=%s",
+            bootAttempts, MAX_BOOT_ATTEMPTS, safeMode ? "YES" : "NO");
+
+  if (safeMode) {
+    logPrint(LOG_ERROR, "SAFE MODE is active from previous boot failures");
+    logPrintf(LOG_ERROR, "System failed to boot %d times consecutively", MAX_BOOT_ATTEMPTS);
+  }
 }
 
 void incrementBootAttempt() {
@@ -131,14 +136,16 @@ void incrementBootAttempt() {
   preferences.putInt("bootAttempts", bootAttempts);
 
   if (bootAttempts >= MAX_BOOT_ATTEMPTS) {
-    Serial.println("!!! MAX BOOT ATTEMPTS REACHED - ENTERING SAFE MODE !!!");
+    logPrint(LOG_ERROR, "!!! MAX BOOT ATTEMPTS REACHED - ENTERING SAFE MODE !!!");
+    logPrintf(LOG_ERROR, "Boot attempt %d/%d failed", bootAttempts, MAX_BOOT_ATTEMPTS);
+    logPrint(LOG_WARNING, "Probable cause: Camera initialization failure");
     safeMode = true;
     preferences.putBool("safeMode", true);
   }
 }
 
 void markBootSuccess() {
-  Serial.println("Boot successful - resetting boot counter");
+  logPrint(LOG_INFO, "Boot successful - resetting boot counter");
   bootAttempts = 0;
   safeMode = false;
   preferences.putInt("bootAttempts", 0);
@@ -429,12 +436,19 @@ void setup() {
   }
 
   if (safeMode) {
-    Serial.println("\n!!! SAFE MODE ACTIVE !!!");
-    Serial.println("Core functions only:");
-    Serial.println("- Temperature monitoring: ENABLED");
-    Serial.println("- Blanket control: ENABLED");
-    Serial.println("- Camera/Photos: DISABLED");
-    Serial.println("To exit safe mode, fix issues and power cycle the device.\n");
+    logPrint(LOG_WARNING, "");
+    logPrint(LOG_WARNING, "!!! SAFE MODE ACTIVE !!!");
+    logPrint(LOG_WARNING, "Reason: Too many failed boot attempts");
+    logPrint(LOG_WARNING, "Core functions only:");
+    logPrint(LOG_WARNING, "- Temperature monitoring: ENABLED");
+    logPrint(LOG_WARNING, "- Blanket control: ENABLED");
+    logPrint(LOG_WARNING, "- Camera/Photos: DISABLED");
+    logPrint(LOG_WARNING, "");
+    logPrint(LOG_INFO, "To exit safe mode:");
+    logPrint(LOG_INFO, "1. Type 'reset' command to clear boot counter");
+    logPrint(LOG_INFO, "2. Power cycle the device");
+    logPrint(LOG_INFO, "3. If camera still fails, check power supply and connections");
+    logPrint(LOG_WARNING, "");
   }
 
   Serial.println("=== Setup Complete ===\n");
