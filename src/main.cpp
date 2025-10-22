@@ -346,13 +346,26 @@ bool uploadPhotoToS3(camera_fb_t* fb) {
 
   int httpResponseCode = http.PUT(fb->buf, fb->len);
 
-  if (httpResponseCode > 0) {
-    Serial.printf("Upload successful! HTTP Response code: %d\n", httpResponseCode);
-    http.end();
+  http.end();
+
+  // HTTP 2xx codes are success, everything else is failure
+  if (httpResponseCode >= 200 && httpResponseCode < 300) {
+    logPrintf(LOG_INFO, "Upload successful! HTTP %d", httpResponseCode);
     return true;
+  } else if (httpResponseCode > 0) {
+    // Got HTTP response but it's an error
+    logPrintf(LOG_ERROR, "Upload failed! HTTP %d", httpResponseCode);
+    if (httpResponseCode == 403) {
+      logPrint(LOG_ERROR, "HTTP 403 Forbidden - Check S3 bucket permissions or credentials");
+    } else if (httpResponseCode == 404) {
+      logPrint(LOG_ERROR, "HTTP 404 Not Found - Check S3 bucket name and region");
+    } else if (httpResponseCode >= 500) {
+      logPrint(LOG_ERROR, "HTTP 5xx Server Error - S3 service issue");
+    }
+    return false;
   } else {
-    Serial.printf("Upload failed! Error: %s\n", http.errorToString(httpResponseCode).c_str());
-    http.end();
+    // Network/connection error
+    logPrintf(LOG_ERROR, "Upload failed! Network error: %s", http.errorToString(httpResponseCode).c_str());
     return false;
   }
 }
@@ -419,20 +432,32 @@ void setup() {
 
   // Connect WiFi temporarily to sync time
   if (connectWiFi()) {
-    Serial.println("Synchronizing time with NTP...");
+    logPrint(LOG_INFO, "Synchronizing time with NTP...");
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
-    // Wait for time to be set
+    // Wait for time to be set (need more time for NTP)
     int attempts = 0;
-    while (time(nullptr) < 100000 && attempts < 10) {
+    while (time(nullptr) < 100000 && attempts < 20) {
       delay(500);
       Serial.print(".");
       attempts++;
     }
-    Serial.println("\nTime synchronized");
+
+    time_t now = time(nullptr);
+    if (now > 100000) {
+      struct tm timeinfo;
+      gmtime_r(&now, &timeinfo);
+      char buffer[64];
+      strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S UTC", &timeinfo);
+      logPrintf(LOG_INFO, "Time synchronized: %s", buffer);
+    } else {
+      logPrint(LOG_WARNING, "Time sync failed - using default timestamp");
+    }
 
     // Disconnect WiFi to save power
     disconnectWiFi();
+  } else {
+    logPrint(LOG_WARNING, "WiFi failed - cannot sync time");
   }
 
   if (safeMode) {
