@@ -346,6 +346,12 @@ bool uploadPhotoToS3(camera_fb_t* fb) {
 
   int httpResponseCode = http.PUT(fb->buf, fb->len);
 
+  // Get response body before closing connection
+  String responseBody = "";
+  if (httpResponseCode > 0) {
+    responseBody = http.getString();
+  }
+
   http.end();
 
   // HTTP 2xx codes are success, everything else is failure
@@ -355,6 +361,16 @@ bool uploadPhotoToS3(camera_fb_t* fb) {
   } else if (httpResponseCode > 0) {
     // Got HTTP response but it's an error
     logPrintf(LOG_ERROR, "Upload failed! HTTP %d", httpResponseCode);
+
+    // Log response body for debugging (truncate if too long)
+    if (responseBody.length() > 0) {
+      if (responseBody.length() > 200) {
+        responseBody = responseBody.substring(0, 200) + "...";
+      }
+      logPrintf(LOG_ERROR, "Response: %s", responseBody.c_str());
+    }
+
+    // Provide helpful hints based on status code
     if (httpResponseCode == 403) {
       logPrint(LOG_ERROR, "HTTP 403 Forbidden - Check S3 bucket permissions or credentials");
     } else if (httpResponseCode == 404) {
