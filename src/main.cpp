@@ -114,6 +114,9 @@ void logPrintf(LogLevel level, const char* format, ...) {
   }
 }
 
+// Forward declarations
+void printStatusReport();
+
 void loadBootState() {
   preferences.begin("cat-shelter", false);
   bootAttempts = preferences.getInt("bootAttempts", 0);
