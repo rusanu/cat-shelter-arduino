@@ -67,8 +67,8 @@ float currentTemp = 0.0;
 float currentHumidity = 0.0;
 unsigned long lastDHTRead = 0;
 bool wifiConnected = false;
-unsigned long lastPhotoTime = 0;
-unsigned long lastHourlyPhotoTime = 0;
+unsigned long lastPhotoTime = 0;  // Will be initialized in setup to allow first motion photo
+unsigned long lastHourlyPhotoTime = 0;  // Will be initialized in setup
 bool lastCatPresent = false;
 unsigned long lastStatusReport = 0;
 
@@ -383,6 +383,11 @@ void setup() {
   incrementBootAttempt();
 
   bootStartTime = millis();
+
+  // Initialize photo timing to allow first motion-triggered photo immediately
+  // Set lastPhotoTime far enough in the past to exceed cooldown period
+  lastPhotoTime = millis() - PHOTO_MOTION_COOLDOWN - 1000;
+  lastHourlyPhotoTime = millis();  // Start counting from boot for hourly photos
 
   // Initialize camera (allow failure in safe mode)
   if (safeMode) {
