@@ -12,6 +12,12 @@ ESP32-CAM based system to control a winter cat shelter with automated heating an
   - Takes photos when motion is detected (max once per 5 minutes)
   - Uploads photos to AWS S3
 - **Power Management**: WiFi disconnects when idle to save power
+- **Resilient Boot System**:
+  - Tracks boot attempts in NVM (flash memory)
+  - Automatically reboots on camera initialization failure
+  - Enters safe mode after 3 failed boot attempts
+  - Safe mode maintains core functions (heating/monitoring) without camera
+  - Resets boot counter after 5 minutes of successful operation
 
 ## Hardware Requirements
 
@@ -130,14 +136,26 @@ Time since last photo: 15 minutes
 ## Troubleshooting
 
 ### Camera fails to initialize
+- The system will automatically reboot and retry up to 3 times
+- After 3 failed attempts, it enters **Safe Mode**
 - Check ESP32-CAM connections
 - Verify you're using the AI Thinker variant
 - Ensure sufficient power supply (5V, 2A recommended)
 
+### System in Safe Mode
+If you see "SAFE MODE ACTIVE" in the serial output:
+- Core functions (heating, temperature monitoring) continue to work
+- Camera and photo uploads are disabled
+- To exit safe mode:
+  1. Fix the underlying issue (usually camera/power related)
+  2. Power cycle the device
+  3. Boot counter will reset after 5 minutes of successful operation
+
 ### WiFi won't connect
 - Verify credentials in `secrets.h`
+- Ensure router is on 2.4GHz (ESP32 doesn't support 5GHz)
 - Check WiFi signal strength
-- Try a different WiFi network
+- System forces WPA2-PSK authentication (not WPA3)
 
 ### DHT22 readings show NaN
 - Check sensor connections
@@ -149,6 +167,13 @@ Time since last photo: 15 minutes
 - Verify AWS credentials
 - Check WiFi connectivity
 - Monitor serial output for error messages
+
+### Checking Boot State
+Boot attempts and safe mode status are stored in NVM. View them in the status report:
+```
+Boot attempts: 1/3
+Mode: NORMAL
+```
 
 ## License
 

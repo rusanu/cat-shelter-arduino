@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <mbedtls/md.h>
+#include <Preferences.h>
 #include "esp_camera.h"
 #include "esp_wifi.h"
 #include "secrets.h"  // WiFi credentials (not in git)
@@ -43,6 +44,10 @@ DHT dht(DHT_PIN, DHT_TYPE);
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 10.0  // Turn on blanket if temp is below this and cat present
 
+// Boot and recovery settings
+#define MAX_BOOT_ATTEMPTS 3       // Max failed boots before entering safe mode
+#define BOOT_SUCCESS_TIMEOUT 300000  // 5 minutes - if running this long, boot is successful
+
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
@@ -54,6 +59,48 @@ unsigned long lastPhotoTime = 0;
 unsigned long lastHourlyPhotoTime = 0;
 bool lastCatPresent = false;
 unsigned long lastStatusReport = 0;
+
+// Boot and recovery state
+Preferences preferences;
+bool safeMode = false;
+bool cameraAvailable = false;
+int bootAttempts = 0;
+unsigned long bootStartTime = 0;
+
+void loadBootState() {
+  preferences.begin("cat-shelter", false);
+  bootAttempts = preferences.getInt("bootAttempts", 0);
+  safeMode = preferences.getBool("safeMode", false);
+
+  Serial.printf("Boot state: attempts=%d, safeMode=%s\n",
+                bootAttempts, safeMode ? "YES" : "NO");
+}
+
+void incrementBootAttempt() {
+  bootAttempts++;
+  preferences.putInt("bootAttempts", bootAttempts);
+
+  if (bootAttempts >= MAX_BOOT_ATTEMPTS) {
+    Serial.println("!!! MAX BOOT ATTEMPTS REACHED - ENTERING SAFE MODE !!!");
+    safeMode = true;
+    preferences.putBool("safeMode", true);
+  }
+}
+
+void markBootSuccess() {
+  Serial.println("Boot successful - resetting boot counter");
+  bootAttempts = 0;
+  safeMode = false;
+  preferences.putInt("bootAttempts", 0);
+  preferences.putBool("safeMode", false);
+}
+
+void rebootSystem(const char* reason) {
+  Serial.printf("\n!!! REBOOTING: %s !!!\n", reason);
+  Serial.flush();
+  delay(1000);
+  ESP.restart();
+}
 
 bool initCamera() {
   camera_config_t config;
@@ -253,10 +300,26 @@ void setup() {
 
   Serial.println("\n=== Cat Shelter Controller Starting ===");
 
-  // Initialize camera first
-  if (!initCamera()) {
-    Serial.println("FATAL: Camera initialization failed!");
-    while (1) delay(1000);  // Halt if camera fails
+  // Load boot state from NVM
+  loadBootState();
+
+  // Increment boot attempt counter
+  incrementBootAttempt();
+
+  bootStartTime = millis();
+
+  // Initialize camera (allow failure in safe mode)
+  if (safeMode) {
+    Serial.println("*** RUNNING IN SAFE MODE - Camera disabled ***");
+    cameraAvailable = false;
+  } else {
+    cameraAvailable = initCamera();
+    if (!cameraAvailable) {
+      Serial.println("WARNING: Camera initialization failed!");
+      Serial.println("System will reboot to retry...");
+      delay(2000);
+      rebootSystem("Camera init failed");
+    }
   }
 
   // Setup GPIO pins
@@ -282,6 +345,15 @@ void setup() {
 
     // Disconnect WiFi to save power
     disconnectWiFi();
+  }
+
+  if (safeMode) {
+    Serial.println("\n!!! SAFE MODE ACTIVE !!!");
+    Serial.println("Core functions only:");
+    Serial.println("- Temperature monitoring: ENABLED");
+    Serial.println("- Blanket control: ENABLED");
+    Serial.println("- Camera/Photos: DISABLED");
+    Serial.println("To exit safe mode, fix issues and power cycle the device.\n");
   }
 
   Serial.println("=== Setup Complete ===\n");
@@ -356,6 +428,11 @@ void updateBlanketControl() {
 }
 
 void takeAndUploadPhoto(const char* reason) {
+  // Skip if camera not available (safe mode or camera failed)
+  if (!cameraAvailable) {
+    return;
+  }
+
   Serial.printf("Taking photo (%s)...\n", reason);
 
   camera_fb_t* fb = capturePhoto();
@@ -375,6 +452,11 @@ void takeAndUploadPhoto(const char* reason) {
 }
 
 void checkPhotoSchedule() {
+  // Skip photo scheduling if camera not available
+  if (!cameraAvailable) {
+    return;
+  }
+
   unsigned long currentMillis = millis();
 
   // Check for hourly photo
@@ -406,24 +488,36 @@ void printStatusReport() {
     lastStatusReport = currentMillis;
 
     Serial.println("\n===== STATUS REPORT =====");
+    Serial.printf("Mode: %s\n", safeMode ? "SAFE MODE" : "NORMAL");
     Serial.printf("Uptime: %lu seconds\n", currentMillis / 1000);
+    Serial.printf("Boot attempts: %d/%d\n", bootAttempts, MAX_BOOT_ATTEMPTS);
     Serial.printf("Temperature: %.1f°C\n", currentTemp);
     Serial.printf("Humidity: %.1f%%\n", currentHumidity);
     Serial.printf("Cat Present: %s\n", catPresent ? "YES" : "NO");
     Serial.printf("Blanket: %s\n", blanketOn ? "ON" : "OFF");
+    Serial.printf("Camera: %s\n", cameraAvailable ? "AVAILABLE" : "DISABLED");
     Serial.printf("WiFi: %s\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
 
-    unsigned long nextHourlyPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
-    Serial.printf("Next hourly photo in: %lu minutes\n", nextHourlyPhoto / 60000);
+    if (cameraAvailable) {
+      unsigned long nextHourlyPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
+      Serial.printf("Next hourly photo in: %lu minutes\n", nextHourlyPhoto / 60000);
 
-    unsigned long timeSinceLastPhoto = currentMillis - lastPhotoTime;
-    Serial.printf("Time since last photo: %lu minutes\n", timeSinceLastPhoto / 60000);
+      unsigned long timeSinceLastPhoto = currentMillis - lastPhotoTime;
+      Serial.printf("Time since last photo: %lu minutes\n", timeSinceLastPhoto / 60000);
+    }
 
     Serial.println("========================\n");
   }
 }
 
 void loop() {
+  unsigned long currentMillis = millis();
+
+  // Check if we've been running successfully for long enough
+  if (bootAttempts > 0 && (currentMillis - bootStartTime) >= BOOT_SUCCESS_TIMEOUT) {
+    markBootSuccess();
+  }
+
   // Check for cat presence
   checkPIRSensor();
 
