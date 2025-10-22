@@ -12,6 +12,7 @@
 #define RELAY_PIN 12        // Relay control for heated blanket
 #define PIR_PIN 13          // PIR motion sensor (cat detection)
 #define DHT_PIN 14          // DHT22 temperature/humidity sensor
+#define FLASH_LED_PIN 4     // Built-in flash LED on ESP32-CAM
 
 // DHT22 Configuration
 #define DHT_TYPE DHT22
@@ -147,8 +148,29 @@ bool initCamera() {
   return true;
 }
 
+void flashOn() {
+  digitalWrite(FLASH_LED_PIN, HIGH);
+}
+
+void flashOff() {
+  digitalWrite(FLASH_LED_PIN, LOW);
+}
+
 camera_fb_t* capturePhoto() {
+  // Turn on flash
+  flashOn();
+  Serial.println("Flash ON");
+
+  // Delay for camera sensors to adjust to lighting
+  delay(200);
+
+  // Capture photo
   camera_fb_t* fb = esp_camera_fb_get();
+
+  // Turn off flash immediately after capture
+  flashOff();
+  Serial.println("Flash OFF");
+
   if (!fb) {
     Serial.println("ERROR: Camera capture failed");
     return nullptr;
@@ -287,10 +309,15 @@ void setupGPIO() {
   // Configure PIR sensor pin as input
   pinMode(PIR_PIN, INPUT);
 
+  // Configure flash LED pin as output
+  pinMode(FLASH_LED_PIN, OUTPUT);
+  digitalWrite(FLASH_LED_PIN, LOW); // Start with flash off
+
   Serial.println("GPIO pins configured:");
   Serial.println("- RELAY_PIN (GPIO12): OUTPUT");
   Serial.println("- PIR_PIN (GPIO13): INPUT");
   Serial.println("- DHT_PIN (GPIO14): DHT22 sensor");
+  Serial.println("- FLASH_LED_PIN (GPIO4): OUTPUT");
 }
 
 void setup() {
