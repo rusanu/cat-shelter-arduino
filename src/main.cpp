@@ -550,6 +550,64 @@ void checkPhotoSchedule() {
   lastCatPresent = catPresent;
 }
 
+void handleSerialCommands() {
+  if (Serial.available() > 0) {
+    String command = Serial.readStringUntil('\n');
+    command.trim();
+    command.toLowerCase();
+
+    if (command == "help" || command == "?") {
+      Serial.println("\n=== Available Commands ===");
+      Serial.println("help or ?     - Show this help");
+      Serial.println("status        - Print current status");
+      Serial.println("snapshot      - Take and upload photo now");
+      Serial.println("loglevel <n>  - Set log level (0=ERROR, 1=WARN, 2=INFO, 3=DEBUG)");
+      Serial.println("reboot        - Reboot system");
+      Serial.println("safemode      - Enter safe mode");
+      Serial.println("reset         - Reset boot counter");
+      Serial.println("========================\n");
+    }
+    else if (command == "status") {
+      printStatusReport();
+    }
+    else if (command == "snapshot") {
+      if (cameraAvailable) {
+        logPrint(LOG_INFO, "Manual snapshot triggered");
+        takeAndUploadPhoto("manual");
+      } else {
+        logPrint(LOG_ERROR, "Camera not available (safe mode or init failed)");
+      }
+    }
+    else if (command.startsWith("loglevel ")) {
+      int level = command.substring(9).toInt();
+      if (level >= 0 && level <= 3) {
+        currentLogLevel = (LogLevel)level;
+        const char* levelNames[] = {"ERROR", "WARNING", "INFO", "DEBUG"};
+        logPrintf(LOG_INFO, "Log level set to: %s", levelNames[level]);
+      } else {
+        logPrint(LOG_ERROR, "Invalid log level. Use 0-3 (ERROR, WARN, INFO, DEBUG)");
+      }
+    }
+    else if (command == "reboot") {
+      rebootSystem("Manual reboot command");
+    }
+    else if (command == "safemode") {
+      logPrint(LOG_WARNING, "Entering safe mode manually");
+      safeMode = true;
+      cameraAvailable = false;
+      preferences.putBool("safeMode", true);
+      logPrint(LOG_INFO, "Safe mode activated. Reboot to apply.");
+    }
+    else if (command == "reset") {
+      markBootSuccess();
+      logPrint(LOG_INFO, "Boot counter reset to 0");
+    }
+    else if (command.length() > 0) {
+      logPrintf(LOG_ERROR, "Unknown command: %s (type 'help' for commands)", command.c_str());
+    }
+  }
+}
+
 void printStatusReport() {
   unsigned long currentMillis = millis();
 
@@ -586,6 +644,9 @@ void loop() {
   if (bootAttempts > 0 && (currentMillis - bootStartTime) >= BOOT_SUCCESS_TIMEOUT) {
     markBootSuccess();
   }
+
+  // Handle serial commands
+  handleSerialCommands();
 
   // Check for cat presence
   checkPIRSensor();
