@@ -49,6 +49,17 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define MAX_BOOT_ATTEMPTS 3       // Max failed boots before entering safe mode
 #define BOOT_SUCCESS_TIMEOUT 300000  // 5 minutes - if running this long, boot is successful
 
+// Logging levels
+enum LogLevel {
+  LOG_ERROR = 0,
+  LOG_WARNING = 1,
+  LOG_INFO = 2,
+  LOG_DEBUG = 3
+};
+
+// Current log level (can be changed via serial commands)
+LogLevel currentLogLevel = LOG_INFO;
+
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
@@ -67,6 +78,41 @@ bool safeMode = false;
 bool cameraAvailable = false;
 int bootAttempts = 0;
 unsigned long bootStartTime = 0;
+
+// Logging functions
+void logPrint(LogLevel level, const char* message) {
+  if (level <= currentLogLevel) {
+    const char* prefix = "";
+    switch (level) {
+      case LOG_ERROR:   prefix = "[ERROR] "; break;
+      case LOG_WARNING: prefix = "[WARN]  "; break;
+      case LOG_INFO:    prefix = "[INFO]  "; break;
+      case LOG_DEBUG:   prefix = "[DEBUG] "; break;
+    }
+    Serial.print(prefix);
+    Serial.println(message);
+  }
+}
+
+void logPrintf(LogLevel level, const char* format, ...) {
+  if (level <= currentLogLevel) {
+    const char* prefix = "";
+    switch (level) {
+      case LOG_ERROR:   prefix = "[ERROR] "; break;
+      case LOG_WARNING: prefix = "[WARN]  "; break;
+      case LOG_INFO:    prefix = "[INFO]  "; break;
+      case LOG_DEBUG:   prefix = "[DEBUG] "; break;
+    }
+    Serial.print(prefix);
+
+    char buffer[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    Serial.println(buffer);
+  }
+}
 
 void loadBootState() {
   preferences.begin("cat-shelter", false);
@@ -159,7 +205,7 @@ void flashOff() {
 camera_fb_t* capturePhoto() {
   // Turn on flash
   flashOn();
-  Serial.println("Flash ON");
+  logPrint(LOG_DEBUG, "Flash ON");
 
   // Delay for camera sensors to adjust to lighting
   delay(200);
@@ -169,14 +215,14 @@ camera_fb_t* capturePhoto() {
 
   // Turn off flash immediately after capture
   flashOff();
-  Serial.println("Flash OFF");
+  logPrint(LOG_DEBUG, "Flash OFF");
 
   if (!fb) {
-    Serial.println("ERROR: Camera capture failed");
+    logPrint(LOG_ERROR, "Camera capture failed");
     return nullptr;
   }
 
-  Serial.printf("Photo captured: %d bytes\n", fb->len);
+  logPrintf(LOG_INFO, "Photo captured: %d bytes", fb->len);
   return fb;
 }
 
@@ -396,9 +442,9 @@ void checkPIRSensor() {
     catPresent = motionDetected;
 
     if (catPresent) {
-      Serial.println("*** CAT DETECTED! ***");
+      logPrint(LOG_INFO, "*** CAT DETECTED! ***");
     } else {
-      Serial.println("--- Cat left ---");
+      logPrint(LOG_INFO, "Cat left");
     }
   }
 }
@@ -409,9 +455,9 @@ void controlBlanket(bool shouldBeOn) {
     digitalWrite(RELAY_PIN, blanketOn ? HIGH : LOW);
 
     if (blanketOn) {
-      Serial.println(">>> BLANKET TURNED ON <<<");
+      logPrint(LOG_INFO, "Blanket turned ON");
     } else {
-      Serial.println("<<< BLANKET TURNED OFF >>>");
+      logPrint(LOG_INFO, "Blanket turned OFF");
     }
   }
 }
@@ -429,7 +475,7 @@ void readDHT22() {
 
     // Check if readings are valid
     if (isnan(temp) || isnan(humidity)) {
-      Serial.println("ERROR: Failed to read from DHT22 sensor!");
+      logPrint(LOG_ERROR, "Failed to read from DHT22 sensor!");
       return;
     }
 
@@ -437,12 +483,8 @@ void readDHT22() {
     currentTemp = temp;
     currentHumidity = humidity;
 
-    // Log readings
-    Serial.print("Temperature: ");
-    Serial.print(currentTemp);
-    Serial.print("°C | Humidity: ");
-    Serial.print(currentHumidity);
-    Serial.println("%");
+    // Log readings at DEBUG level (happens every 2 seconds, too verbose for INFO)
+    logPrintf(LOG_DEBUG, "Temperature: %.1f°C | Humidity: %.1f%%", currentTemp, currentHumidity);
   }
 }
 
@@ -460,7 +502,7 @@ void takeAndUploadPhoto(const char* reason) {
     return;
   }
 
-  Serial.printf("Taking photo (%s)...\n", reason);
+  logPrintf(LOG_INFO, "Taking photo (%s)...", reason);
 
   camera_fb_t* fb = capturePhoto();
   if (fb) {
@@ -468,9 +510,9 @@ void takeAndUploadPhoto(const char* reason) {
     releasePhoto(fb);
 
     if (success) {
-      Serial.println("Photo uploaded successfully!");
+      logPrint(LOG_INFO, "Photo uploaded successfully!");
     } else {
-      Serial.println("Photo upload failed!");
+      logPrint(LOG_WARNING, "Photo upload failed!");
     }
 
     // Disconnect WiFi after upload to save power
