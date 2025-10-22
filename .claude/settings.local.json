@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(bd)",
+      "Bash(bd onboard:*)",
+      "Bash(bd ready:*)",
+      "Bash(bd create:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
