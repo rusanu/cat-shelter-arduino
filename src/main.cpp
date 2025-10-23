@@ -503,6 +503,13 @@ bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
   // Make authenticated request
   HTTPClient http;
   http.begin(url);
+
+  // Set timeouts for large file uploads
+  // For 78KB photos: ~10 seconds should be sufficient even on slow connections
+  // Default timeout is only 5 seconds which can fail for large payloads
+  http.setConnectTimeout(5000);  // 5 seconds to establish connection
+  http.setTimeout(15000);        // 15 seconds for data transfer (SO_SNDTIMEO)
+
   http.addHeader("Host", host);
   http.addHeader("x-amz-date", amzDate);
   http.addHeader("x-amz-content-sha256", payloadHash);
@@ -600,6 +607,11 @@ bool uploadStatusToS3(const String& filename) {
   // Make authenticated request
   HTTPClient http;
   http.begin(url);
+
+  // Set timeouts (same as photo upload for consistency)
+  http.setConnectTimeout(5000);  // 5 seconds to establish connection
+  http.setTimeout(15000);        // 15 seconds for data transfer
+
   http.addHeader("Host", host);
   http.addHeader("x-amz-date", amzDate);
   http.addHeader("x-amz-content-sha256", payloadHash);
