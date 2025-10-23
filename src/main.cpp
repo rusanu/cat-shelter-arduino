@@ -1092,6 +1092,17 @@ String generateStatusJSON() {
   json += "  \"using_fallback_temperature\": " + String((effectiveTemp != currentTemp) ? "true" : "false") + ",\n";
 
   json += "  \"cat_present\": " + String(catPresent ? "true" : "false") + ",\n";
+
+  // Cat presence timing info (PIR motion-based with timeout)
+  if (lastMotionDetected > 0) {
+    unsigned long timeSinceMotion = currentMillis - lastMotionDetected;
+    json += "  \"seconds_since_last_motion\": " + String(timeSinceMotion / 1000) + ",\n";
+    if (catPresent) {
+      unsigned long timeUntilTimeout = CAT_PRESENCE_TIMEOUT - timeSinceMotion;
+      json += "  \"presence_timeout_seconds\": " + String(timeUntilTimeout / 1000) + ",\n";
+    }
+  }
+
   json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
   json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false") + ",\n";
@@ -1131,7 +1142,22 @@ void printStatusReport(bool forceImmediate) {
     Serial.printf("Temperature: %.1f°C\n", currentTemp);
     Serial.printf("Humidity: %.1f%%\n", currentHumidity);
     Serial.printf("DHT22 Sensor: %s\n", dhtSensorWorking ? "WORKING" : "FAILED");
-    Serial.printf("Cat Present: %s\n", catPresent ? "YES" : "NO");
+
+    // Cat presence with timeout info
+    if (catPresent) {
+      unsigned long timeSinceMotion = currentMillis - lastMotionDetected;
+      unsigned long timeUntilTimeout = CAT_PRESENCE_TIMEOUT - timeSinceMotion;
+      Serial.printf("Cat Present: YES (motion %lu min ago, timeout in %lu min)\n",
+                    timeSinceMotion / 60000, timeUntilTimeout / 60000);
+    } else {
+      if (lastMotionDetected > 0) {
+        unsigned long timeSinceMotion = currentMillis - lastMotionDetected;
+        Serial.printf("Cat Present: NO (last motion %lu min ago)\n", timeSinceMotion / 60000);
+      } else {
+        Serial.printf("Cat Present: NO (no motion detected since boot)\n");
+      }
+    }
+
     Serial.printf("Blanket: %s\n", blanketOn ? "ON" : "OFF");
     Serial.printf("Camera: %s\n", cameraAvailable ? "AVAILABLE" : "DISABLED");
     Serial.printf("WiFi: %s\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
