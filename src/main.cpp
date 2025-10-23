@@ -159,7 +159,7 @@ void logPrintf(LogLevel level, const char* format, ...) {
 }
 
 // Forward declarations
-void printStatusReport();
+void printStatusReport(bool forceImmediate = false);
 String generateStatusJSON();
 float getExpectedTemperature();
 float getEffectiveTemperature();
@@ -450,6 +450,44 @@ void disconnectWiFi() {
   wifiConnected = false;
 }
 
+bool syncTimeWithNTP(int maxRetries = 3) {
+  logPrint(LOG_INFO, "Synchronizing time with NTP...");
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+
+  // Try multiple times if needed
+  for (int retry = 0; retry < maxRetries; retry++) {
+    if (retry > 0) {
+      logPrintf(LOG_WARNING, "NTP sync retry %d/%d", retry, maxRetries - 1);
+    }
+
+    // Wait for time to be set
+    int attempts = 0;
+    while (time(nullptr) < 100000 && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+
+    time_t now = time(nullptr);
+    if (now > 100000) {
+      struct tm timeinfo;
+      gmtime_r(&now, &timeinfo);
+      char buffer[64];
+      strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S UTC", &timeinfo);
+      logPrintf(LOG_INFO, "Time synchronized: %s", buffer);
+      return true;
+    }
+
+    // Failed this attempt, wait before retry
+    if (retry < maxRetries - 1) {
+      delay(2000);  // Wait 2 seconds before retry
+    }
+  }
+
+  logPrint(LOG_ERROR, "NTP sync failed after all retries");
+  return false;
+}
+
 String getTimestamp() {
   time_t now = time(nullptr);
   struct tm timeinfo;
@@ -473,9 +511,13 @@ bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
   // Verify time is set (required for AWS Signature V4)
   time_t now = time(nullptr);
   if (now < 100000) {
-    logPrint(LOG_ERROR, "Time not synchronized! Cannot generate AWS signature.");
-    logPrint(LOG_WARNING, "Reboot to retry NTP sync");
-    return false;
+    logPrint(LOG_WARNING, "Time not synchronized! Attempting NTP sync...");
+
+    // Try to sync time on-demand (WiFi already connected)
+    if (!syncTimeWithNTP(3)) {
+      logPrint(LOG_ERROR, "Cannot generate AWS signature without time sync");
+      return false;
+    }
   }
 
   // Build S3 path with folder (if configured)
@@ -573,8 +615,13 @@ bool uploadStatusToS3(const String& filename) {
   // Verify time is set (required for AWS Signature V4)
   time_t now = time(nullptr);
   if (now < 100000) {
-    logPrint(LOG_ERROR, "Time not synchronized! Cannot generate AWS signature.");
-    return false;
+    logPrint(LOG_WARNING, "Time not synchronized! Attempting NTP sync...");
+
+    // Try to sync time on-demand (WiFi already connected)
+    if (!syncTimeWithNTP(3)) {
+      logPrint(LOG_ERROR, "Cannot generate AWS signature without time sync");
+      return false;
+    }
   }
 
   // Generate status JSON
@@ -710,27 +757,7 @@ void setup() {
 
   // Connect WiFi temporarily to sync time
   if (connectWiFi()) {
-    logPrint(LOG_INFO, "Synchronizing time with NTP...");
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-
-    // Wait for time to be set (need more time for NTP)
-    int attempts = 0;
-    while (time(nullptr) < 100000 && attempts < 20) {
-      delay(500);
-      Serial.print(".");
-      attempts++;
-    }
-
-    time_t now = time(nullptr);
-    if (now > 100000) {
-      struct tm timeinfo;
-      gmtime_r(&now, &timeinfo);
-      char buffer[64];
-      strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S UTC", &timeinfo);
-      logPrintf(LOG_INFO, "Time synchronized: %s", buffer);
-    } else {
-      logPrint(LOG_WARNING, "Time sync failed - using default timestamp");
-    }
+    syncTimeWithNTP(3);  // Try up to 3 times
 
     // WiFi will disconnect automatically after idle timeout (don't force immediate disconnect)
     logPrint(LOG_INFO, "WiFi will disconnect after idle timeout");
@@ -986,7 +1013,7 @@ void handleSerialCommands() {
       Serial.println("========================\n");
     }
     else if (command == "status") {
-      printStatusReport();
+      printStatusReport(true);  // Force immediate output, bypass 60s interval
     }
     else if (command == "snapshot") {
       if (cameraAvailable) {
@@ -1076,10 +1103,11 @@ String generateStatusJSON() {
   return json;
 }
 
-void printStatusReport() {
+void printStatusReport(bool forceImmediate) {
   unsigned long currentMillis = millis();
 
-  if (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL) {
+  // Check timing unless forced (e.g., from manual command)
+  if (forceImmediate || (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL)) {
     lastStatusReport = currentMillis;
 
     String statusJSON = generateStatusJSON();
