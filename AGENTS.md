@@ -15,7 +15,7 @@ When resolving an issue, commit. Never push because push may trigger Github Acti
 ### Hardware ###
 There are 3 devices connected
 - GPIO12 connects to a relay control (output). When HIGH it will activate a termal blanket
-- GPIO13 is connected to a PIR sensor (input). It detecs cat(s) presence
+- GPIO13 is connected to a PIR HC-SR501 sensor (input). It detecs cat(s) presence
 - GPIO14 is connected to a DHT22/AM2302 temperature/humidity senzor.
 The onboard camera and wifi are functional and used by the project. The SD card is not enabled.
 
