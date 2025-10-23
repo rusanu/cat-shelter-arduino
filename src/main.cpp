@@ -42,6 +42,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define PHOTO_HOURLY_INTERVAL 3600000  // 60 minutes in milliseconds
 #define PHOTO_MOTION_COOLDOWN 300000   // 5 minutes in milliseconds
 #define STATUS_REPORT_INTERVAL 60000   // Status report every 60 seconds
+#define WIFI_IDLE_TIMEOUT 360000       // 6 minutes idle before WiFi disconnect (> motion cooldown)
 
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 10.0  // Turn on blanket if temp is below this and cat present
@@ -68,6 +69,7 @@ float currentTemp = 0.0;
 float currentHumidity = 0.0;
 unsigned long lastDHTRead = 0;
 bool wifiConnected = false;
+unsigned long lastWiFiActivity = 0;  // Track last WiFi usage for idle timeout
 unsigned long lastPhotoTime = 0;  // Will be initialized in setup to allow first motion photo
 unsigned long lastHourlyPhotoTime = 0;  // Will be initialized in setup
 bool lastCatPresent = false;
@@ -378,6 +380,7 @@ bool connectWiFi() {
 
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
+    lastWiFiActivity = millis();  // Track WiFi activity
     Serial.println("\nWiFi connected!");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
@@ -690,12 +693,12 @@ void takeAndUploadPhoto(const char* reason) {
 
     if (success) {
       logPrint(LOG_INFO, "Photo uploaded successfully!");
+      lastWiFiActivity = millis();  // Update activity timestamp
     } else {
       logPrint(LOG_WARNING, "Photo upload failed!");
     }
 
-    // Disconnect WiFi after upload to save power
-    disconnectWiFi();
+    // WiFi will disconnect after idle timeout (not immediately)
   }
 }
 
@@ -822,6 +825,12 @@ void loop() {
   // Check if we've been running successfully for long enough
   if (bootAttempts > 0 && (currentMillis - bootStartTime) >= BOOT_SUCCESS_TIMEOUT) {
     markBootSuccess();
+  }
+
+  // Check WiFi idle timeout and disconnect if inactive
+  if (wifiConnected && (currentMillis - lastWiFiActivity) >= WIFI_IDLE_TIMEOUT) {
+    logPrint(LOG_INFO, "WiFi idle timeout - disconnecting to save power");
+    disconnectWiFi();
   }
 
   // Handle serial commands
