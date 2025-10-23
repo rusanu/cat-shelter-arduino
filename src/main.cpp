@@ -507,8 +507,8 @@ bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
   // Set timeouts for large file uploads
   // For 78KB photos: ~10 seconds should be sufficient even on slow connections
   // Default timeout is only 5 seconds which can fail for large payloads
-  http.setConnectTimeout(5000);  // 5 seconds to establish connection
-  http.setTimeout(15000);        // 15 seconds for data transfer (SO_SNDTIMEO)
+  http.setConnectTimeout(15000);  // 15 seconds to establish connection
+  http.setTimeout(60000);        // 60 seconds for data transfer (SO_SNDTIMEO)
 
   http.addHeader("Host", host);
   http.addHeader("x-amz-date", amzDate);
@@ -1052,7 +1052,14 @@ String generateStatusJSON() {
   json += "  \"cat_present\": " + String(catPresent ? "true" : "false") + ",\n";
   json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
-  json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false");
+  json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false") + ",\n";
+
+  // Memory status (for leak detection)
+  json += "  \"heap_free_bytes\": " + String(ESP.getFreeHeap()) + ",\n";
+  json += "  \"heap_size_bytes\": " + String(ESP.getHeapSize()) + ",\n";
+  json += "  \"heap_min_free_bytes\": " + String(ESP.getMinFreeHeap()) + ",\n";
+  json += "  \"psram_free_bytes\": " + String(ESP.getFreePsram()) + ",\n";
+  json += "  \"psram_size_bytes\": " + String(ESP.getPsramSize());
 
   if (cameraAvailable) {
     unsigned long nextHourlyPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
@@ -1085,6 +1092,15 @@ void printStatusReport() {
     Serial.printf("Blanket: %s\n", blanketOn ? "ON" : "OFF");
     Serial.printf("Camera: %s\n", cameraAvailable ? "AVAILABLE" : "DISABLED");
     Serial.printf("WiFi: %s\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
+
+    // Memory status (for leak detection)
+    Serial.println("--- Memory Status ---");
+    Serial.printf("Heap Free: %u bytes (%.1f KB)\n", ESP.getFreeHeap(), ESP.getFreeHeap() / 1024.0);
+    Serial.printf("Heap Size: %u bytes (%.1f KB)\n", ESP.getHeapSize(), ESP.getHeapSize() / 1024.0);
+    Serial.printf("Heap Min Free: %u bytes (%.1f KB)\n", ESP.getMinFreeHeap(), ESP.getMinFreeHeap() / 1024.0);
+    Serial.printf("PSRAM Free: %u bytes (%.1f KB)\n", ESP.getFreePsram(), ESP.getFreePsram() / 1024.0);
+    Serial.printf("PSRAM Size: %u bytes (%.1f KB)\n", ESP.getPsramSize(), ESP.getPsramSize() / 1024.0);
+    Serial.println("---------------------");
 
     if (cameraAvailable) {
       unsigned long nextHourlyPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
