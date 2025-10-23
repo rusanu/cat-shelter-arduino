@@ -1,3 +1,18 @@
+/*
+ * Cat Shelter Controller - ESP32-CAM based winter shelter automation
+ *
+ * Features:
+ * - Temperature/humidity monitoring (DHT22)
+ * - Motion-based cat presence detection (PIR HC-SR501)
+ * - Smart heated blanket control
+ * - Photo capture and AWS S3 upload
+ * - Solar/battery power optimized
+ *
+ * MIT License - see LICENSE file for details
+ *
+ * Hardware: ESP32-CAM (AI Thinker), DHT22, PIR HC-SR501, Relay module
+ */
+
 #include <Arduino.h>
 #include <DHT.h>
 #include <WiFi.h>
