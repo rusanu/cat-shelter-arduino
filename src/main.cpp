@@ -49,6 +49,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define STATUS_REPORT_INTERVAL 60000   // Status report every 60 seconds
 #define WIFI_IDLE_TIMEOUT 360000       // 6 minutes idle before WiFi disconnect (> motion cooldown)
 #define BLANKET_MIN_STATE_TIME 300000  // 5 minutes minimum time before blanket can change state
+#define CAT_PRESENCE_TIMEOUT 3600000   // 60 minutes - PIR motion extends presence (PIR is motion, not presence)
 
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 10.0  // Turn on blanket if temp is below this and cat present
@@ -104,6 +105,7 @@ LogLevel currentLogLevel = LOG_INFO;
 bool catPresent = false;
 bool blanketOn = false;
 unsigned long lastBlanketChange = 0;  // Track when blanket last changed state for debouncing
+unsigned long lastMotionDetected = 0;  // Track last PIR motion for presence timeout
 float currentTemp = 0.0;
 float currentHumidity = 0.0;
 unsigned long lastDHTRead = 0;
@@ -785,18 +787,28 @@ void setup() {
 }
 
 void checkPIRSensor() {
+  unsigned long currentMillis = millis();
+
   // Read PIR sensor state
   int pirState = digitalRead(PIR_PIN);
   bool motionDetected = (pirState == HIGH);
 
-  // Update cat presence state if it changed
-  if (motionDetected != catPresent) {
-    catPresent = motionDetected;
-
-    if (catPresent) {
-      logPrint(LOG_INFO, "*** CAT DETECTED! ***");
+  // PIR HC-SR501 is a MOTION detector, not a PRESENCE sensor
+  // Motion detection extends the presence timer (cat might be sleeping)
+  if (motionDetected) {
+    // Motion detected - update timestamp and mark cat as present
+    if (!catPresent) {
+      logPrint(LOG_INFO, "*** CAT MOTION DETECTED! ***");
+      catPresent = true;
     } else {
-      logPrint(LOG_INFO, "Cat left");
+      logPrint(LOG_DEBUG, "Cat motion (presence extended)");
+    }
+    lastMotionDetected = currentMillis;
+  } else {
+    // No current motion - check if presence timeout expired
+    if (catPresent && (currentMillis - lastMotionDetected) >= CAT_PRESENCE_TIMEOUT) {
+      logPrint(LOG_INFO, "Cat presence timeout - no motion for 60 minutes");
+      catPresent = false;
     }
   }
 }
