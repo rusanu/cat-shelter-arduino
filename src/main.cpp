@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <mbedtls/md.h>
+#include <mbedtls/sha256.h>
 #include <Preferences.h>
 #include "esp_camera.h"
 #include "esp_wifi.h"
@@ -116,6 +117,99 @@ void logPrintf(LogLevel level, const char* format, ...) {
 
 // Forward declarations
 void printStatusReport();
+
+// ===== AWS Signature V4 Functions =====
+// Adapted from: https://github.com/Mair/esp-aws-s3-auth-header
+
+void getSHA256AsString(const char *input, size_t input_len, char *output) {
+  uint8_t shaOutput[32] = {};
+  mbedtls_sha256((uint8_t *)input, input_len, shaOutput, 0);
+
+  char temp[65] = {};
+  for (int i = 0; i < 32; i++) {
+    sprintf(output, "%s%02x", temp, shaOutput[i]);
+    strcpy(temp, output);
+  }
+}
+
+void getSignatureKey(const char *key, const char *dateStamp, const char *regionName, const char *serviceName, uint8_t *output) {
+  char augKey[100];
+  sprintf(augKey, "AWS4%s", key);
+
+  memset(output, 0, 32);
+  const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+
+  mbedtls_md_hmac(md_info, (uint8_t *)augKey, strlen(augKey), (uint8_t *)dateStamp, strlen(dateStamp), output);
+  mbedtls_md_hmac(md_info, output, 32, (uint8_t *)regionName, strlen(regionName), output);
+  mbedtls_md_hmac(md_info, output, 32, (uint8_t *)serviceName, strlen(serviceName), output);
+  const char *aws4Request = "aws4_request";
+  mbedtls_md_hmac(md_info, output, 32, (uint8_t *)aws4Request, strlen(aws4Request), output);
+}
+
+void generateAWSSignatureV4(const char *method, const char *host, const char *uri,
+                           const char *region, const char *accessKey, const char *secretKey,
+                           const uint8_t *payload, size_t payload_len,
+                           char *outAuthHeader, char *outAmzDate, char *outPayloadHash) {
+  // Get current time
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
+
+  // Format dates
+  char amzDate[18];
+  strftime(amzDate, sizeof(amzDate), "%Y%m%dT%H%M%SZ", &timeinfo);
+  strcpy(outAmzDate, amzDate);
+
+  char dateStamp[12];
+  strftime(dateStamp, sizeof(dateStamp), "%Y%m%d", &timeinfo);
+
+  // Calculate payload hash
+  getSHA256AsString((const char *)payload, payload_len, outPayloadHash);
+
+  // Step 1 & 2: Create canonical request and hash it
+  const char *signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  char canonicalHeaders[300];
+  sprintf(canonicalHeaders, "host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
+          host, outPayloadHash, amzDate);
+
+  const char *canonicalQueryString = "";
+  char canonicalRequest[600];
+  sprintf(canonicalRequest, "%s\n%s\n%s\n%s\n%s\n%s",
+          method, uri, canonicalQueryString, canonicalHeaders, signedHeaders, outPayloadHash);
+
+  char canonicalRequestHash[65];
+  getSHA256AsString(canonicalRequest, strlen(canonicalRequest), canonicalRequestHash);
+
+  // Step 3: Create string to sign
+  char credentialScope[100];
+  sprintf(credentialScope, "%s/%s/s3/aws4_request", dateStamp, region);
+
+  const char *algorithm = "AWS4-HMAC-SHA256";
+  char stringToSign[300];
+  sprintf(stringToSign, "%s\n%s\n%s\n%s", algorithm, amzDate, credentialScope, canonicalRequestHash);
+
+  // Step 4: Calculate signature
+  uint8_t signatureKey[32];
+  getSignatureKey(secretKey, dateStamp, region, "s3", signatureKey);
+
+  uint8_t signature[32];
+  const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  mbedtls_md_hmac(md_info, signatureKey, 32, (uint8_t *)stringToSign, strlen(stringToSign), signature);
+
+  // Convert signature to hex string
+  char signatureStr[65] = {};
+  char temp[65] = {};
+  for (int i = 0; i < 32; i++) {
+    sprintf(signatureStr, "%s%02x", temp, signature[i]);
+    strcpy(temp, signatureStr);
+  }
+
+  // Step 5: Build authorization header
+  sprintf(outAuthHeader, "%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+          algorithm, accessKey, credentialScope, signedHeaders, signatureStr);
+}
+
+// ===== End AWS Signature V4 Functions =====
 
 void loadBootState() {
   preferences.begin("cat-shelter", false);
@@ -319,7 +413,7 @@ String getTimestamp() {
 
 bool uploadPhotoToS3(camera_fb_t* fb) {
   if (!fb || fb->len == 0) {
-    Serial.println("ERROR: Invalid photo buffer");
+    logPrint(LOG_ERROR, "Invalid photo buffer");
     return false;
   }
 
@@ -328,21 +422,43 @@ bool uploadPhotoToS3(camera_fb_t* fb) {
     return false;
   }
 
+  // Verify time is set (required for AWS Signature V4)
+  time_t now = time(nullptr);
+  if (now < 100000) {
+    logPrint(LOG_ERROR, "Time not synchronized! Cannot generate AWS signature.");
+    logPrint(LOG_WARNING, "Reboot to retry NTP sync");
+    return false;
+  }
+
   // Generate filename with timestamp
   String filename = "cat_" + getTimestamp() + ".jpg";
-  String url = String("https://") + S3_BUCKET + ".s3." + AWS_REGION + ".amazonaws.com/" + filename;
+  String uri = "/" + filename;
+  String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
+  String url = "https://" + host + uri;
 
-  Serial.print("Uploading photo to S3: ");
-  Serial.println(filename);
+  logPrintf(LOG_INFO, "Uploading photo to S3: %s", filename.c_str());
 
+  // Generate AWS Signature V4 authentication headers
+  char authHeader[400];
+  char amzDate[18];
+  char payloadHash[65];
+
+  generateAWSSignatureV4("PUT", host.c_str(), uri.c_str(),
+                         AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+                         fb->buf, fb->len,
+                         authHeader, amzDate, payloadHash);
+
+  // Make authenticated request
   HTTPClient http;
   http.begin(url);
+  http.addHeader("Host", host);
+  http.addHeader("x-amz-date", amzDate);
+  http.addHeader("x-amz-content-sha256", payloadHash);
+  http.addHeader("Authorization", authHeader);
   http.addHeader("Content-Type", "image/jpeg");
   http.addHeader("Content-Length", String(fb->len));
 
-  // Note: For production, you should implement AWS Signature V4
-  // This is a simplified version that requires S3 bucket to accept unsigned uploads
-  // or use pre-signed URLs generated by a backend service
+  logPrint(LOG_DEBUG, "Sending PUT request with AWS Signature V4...");
 
   int httpResponseCode = http.PUT(fb->buf, fb->len);
 
