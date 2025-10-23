@@ -119,6 +119,7 @@ void logPrintf(LogLevel level, const char* format, ...) {
 
 // Forward declarations
 void printStatusReport();
+String generateStatusJSON();
 
 // ===== AWS Signature V4 Functions =====
 // Adapted from: https://github.com/Mair/esp-aws-s3-auth-header
@@ -414,7 +415,7 @@ String getTimestamp() {
   return String(buffer);
 }
 
-bool uploadPhotoToS3(camera_fb_t* fb) {
+bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
   if (!fb || fb->len == 0) {
     logPrint(LOG_ERROR, "Invalid photo buffer");
     return false;
@@ -433,8 +434,6 @@ bool uploadPhotoToS3(camera_fb_t* fb) {
     return false;
   }
 
-  // Generate filename with timestamp
-  String filename = "cat_" + getTimestamp() + ".jpg";
   String uri = "/" + filename;
   String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
   String url = "https://" + host + uri;
@@ -501,6 +500,77 @@ bool uploadPhotoToS3(camera_fb_t* fb) {
   } else {
     // Network/connection error
     logPrintf(LOG_ERROR, "Upload failed! Network error: %s", http.errorToString(httpResponseCode).c_str());
+    return false;
+  }
+}
+
+bool uploadStatusToS3(const String& filename) {
+  // Ensure WiFi is connected
+  if (!connectWiFi()) {
+    return false;
+  }
+
+  // Verify time is set (required for AWS Signature V4)
+  time_t now = time(nullptr);
+  if (now < 100000) {
+    logPrint(LOG_ERROR, "Time not synchronized! Cannot generate AWS signature.");
+    return false;
+  }
+
+  // Generate status JSON
+  String statusJSON = generateStatusJSON();
+  uint8_t* payload = (uint8_t*)statusJSON.c_str();
+  size_t payload_len = statusJSON.length();
+
+  // Use same filename but with .json extension
+  String uri = "/" + filename;
+  String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
+  String url = "https://" + host + uri;
+
+  logPrintf(LOG_DEBUG, "Uploading status JSON to S3: %s", filename.c_str());
+
+  // Generate AWS Signature V4 authentication headers
+  char authHeader[400];
+  char amzDate[18];
+  char payloadHash[65];
+
+  generateAWSSignatureV4("PUT", host.c_str(), uri.c_str(),
+                         AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+                         payload, payload_len,
+                         authHeader, amzDate, payloadHash);
+
+  // Make authenticated request
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Host", host);
+  http.addHeader("x-amz-date", amzDate);
+  http.addHeader("x-amz-content-sha256", payloadHash);
+  http.addHeader("Authorization", authHeader);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Content-Length", String(payload_len));
+
+  int httpResponseCode = http.PUT(payload, payload_len);
+
+  // Get response body before closing connection
+  String responseBody = "";
+  if (httpResponseCode > 0) {
+    responseBody = http.getString();
+  }
+
+  http.end();
+
+  // HTTP 2xx codes are success
+  if (httpResponseCode >= 200 && httpResponseCode < 300) {
+    logPrintf(LOG_DEBUG, "Status JSON uploaded successfully! HTTP %d", httpResponseCode);
+    return true;
+  } else if (httpResponseCode > 0) {
+    logPrintf(LOG_WARNING, "Status JSON upload failed! HTTP %d", httpResponseCode);
+    if (responseBody.length() > 0 && responseBody.length() <= 100) {
+      logPrintf(LOG_DEBUG, "Response: %s", responseBody.c_str());
+    }
+    return false;
+  } else {
+    logPrintf(LOG_WARNING, "Status JSON upload failed! Network error: %s", http.errorToString(httpResponseCode).c_str());
     return false;
   }
 }
@@ -686,14 +756,27 @@ void takeAndUploadPhoto(const char* reason) {
 
   logPrintf(LOG_INFO, "Taking photo (%s)...", reason);
 
+  // Generate base filename with timestamp (without extension)
+  String baseFilename = "cat_" + getTimestamp();
+  String photoFilename = baseFilename + ".jpg";
+  String jsonFilename = baseFilename + ".json";
+
   camera_fb_t* fb = capturePhoto();
   if (fb) {
-    bool success = uploadPhotoToS3(fb);
+    bool photoSuccess = uploadPhotoToS3(fb, photoFilename);
     releasePhoto(fb);
 
-    if (success) {
+    if (photoSuccess) {
       logPrint(LOG_INFO, "Photo uploaded successfully!");
       lastWiFiActivity = millis();  // Update activity timestamp
+
+      // Upload status JSON with same base filename
+      bool jsonSuccess = uploadStatusToS3(jsonFilename);
+      if (jsonSuccess) {
+        logPrint(LOG_INFO, "Status JSON uploaded successfully!");
+      } else {
+        logPrint(LOG_WARNING, "Status JSON upload failed (photo was uploaded)");
+      }
     } else {
       logPrint(LOG_WARNING, "Photo upload failed!");
     }
@@ -790,11 +873,47 @@ void handleSerialCommands() {
   }
 }
 
+String generateStatusJSON() {
+  unsigned long currentMillis = millis();
+  time_t now = time(nullptr);
+  struct tm timeinfo;
+  gmtime_r(&now, &timeinfo);
+  char timestamp[64];
+  strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
+
+  // Generate JSON manually (no complex libraries needed)
+  String json = "{\n";
+  json += "  \"timestamp\": \"" + String(timestamp) + "\",\n";
+  json += "  \"uptime_seconds\": " + String(currentMillis / 1000) + ",\n";
+  json += "  \"mode\": \"" + String(safeMode ? "SAFE_MODE" : "NORMAL") + "\",\n";
+  json += "  \"boot_attempts\": " + String(bootAttempts) + ",\n";
+  json += "  \"max_boot_attempts\": " + String(MAX_BOOT_ATTEMPTS) + ",\n";
+  json += "  \"temperature_celsius\": " + String(currentTemp, 1) + ",\n";
+  json += "  \"humidity_percent\": " + String(currentHumidity, 1) + ",\n";
+  json += "  \"cat_present\": " + String(catPresent ? "true" : "false") + ",\n";
+  json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
+  json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
+  json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false");
+
+  if (cameraAvailable) {
+    unsigned long nextHourlyPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
+    unsigned long timeSinceLastPhoto = currentMillis - lastPhotoTime;
+    json += ",\n";
+    json += "  \"next_hourly_photo_minutes\": " + String(nextHourlyPhoto / 60000) + ",\n";
+    json += "  \"time_since_last_photo_minutes\": " + String(timeSinceLastPhoto / 60000);
+  }
+
+  json += "\n}";
+  return json;
+}
+
 void printStatusReport() {
   unsigned long currentMillis = millis();
 
   if (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL) {
     lastStatusReport = currentMillis;
+
+    String statusJSON = generateStatusJSON();
 
     Serial.println("\n===== STATUS REPORT =====");
     Serial.printf("Mode: %s\n", safeMode ? "SAFE MODE" : "NORMAL");

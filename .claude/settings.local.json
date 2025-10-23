@@ -13,7 +13,8 @@
       "Bash(git commit -m \"$(cat <<''EOF''\nImplement complete cat shelter controller system\n\nFeatures implemented:\n- GPIO configuration for relay, PIR sensor, and DHT22\n- DHT22 temperature and humidity monitoring (2-second intervals)\n- PIR motion detection for cat presence\n- Relay control for heated blanket\n- ESP32-CAM initialization and photo capture\n- WiFi power management with WPA2-PSK authentication\n- S3 photo upload functionality via HTTP\n- Smart blanket control (activates when temp < 10°C AND cat present)\n- Photo scheduling (hourly + motion-triggered with 5min cooldown)\n- NTP time synchronization\n- Comprehensive status reporting every 60 seconds\n- Secrets management with gitignored credentials file\n\nHardware connections:\n- GPIO12: Relay for heated blanket (OUTPUT)\n- GPIO13: PIR motion sensor (INPUT)\n- GPIO14: DHT22 temperature/humidity sensor\n\nTechnical details:\n- Forces WPA2-PSK authentication for compatibility\n- WiFi disconnects when idle for power saving\n- Camera configured for AI Thinker ESP32-CAM module\n- Temperature threshold: 10°C\n- Photo cooldown: 5 minutes between motion-triggered photos\n- Status reports include uptime, sensors, and timing info\n\nAll 12 planned bd issues completed and tested successfully.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
       "Bash(git commit:*)",
       "Bash(bd list:*)",
-      "Read(//c/git/esp-aws-s3-auth-header/**)"
+      "Read(//c/git/esp-aws-s3-auth-header/**)",
+      "Bash(pio run:*)"
     ],
     "deny": [],
     "ask": []
