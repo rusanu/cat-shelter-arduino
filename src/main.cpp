@@ -47,6 +47,37 @@ DHT dht(DHT_PIN, DHT_TYPE);
 
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 10.0  // Turn on blanket if temp is below this and cat present
+#define TEMP_MAX_REASONABLE 30.0  // Maximum reasonable outdoor temperature (detect sensor errors)
+#define TEMP_MIN_REASONABLE -20.0 // Minimum reasonable outdoor temperature (detect sensor errors)
+
+// Typical winter temperatures for Pitesti, Romania (December-February) by hour (in Celsius)
+// Based on average winter nighttime lows (-5 to 5°C) and daytime highs (0 to 10°C)
+const float WINTER_TEMP_TABLE[24] = {
+  -2.0,  // 00:00 - coldest part of night
+  -3.0,  // 01:00
+  -3.5,  // 02:00
+  -4.0,  // 03:00 - coldest before dawn
+  -3.5,  // 04:00
+  -3.0,  // 05:00
+  -2.0,  // 06:00 - sunrise
+  -1.0,  // 07:00
+   0.0,  // 08:00
+   2.0,  // 09:00
+   4.0,  // 10:00 - warming up
+   6.0,  // 11:00
+   7.0,  // 12:00 - peak daytime
+   8.0,  // 13:00
+   7.0,  // 14:00
+   6.0,  // 15:00 - starting to cool
+   4.0,  // 16:00
+   2.0,  // 17:00 - sunset
+   1.0,  // 18:00
+   0.0,  // 19:00
+  -1.0,  // 20:00
+  -1.5,  // 21:00
+  -2.0,  // 22:00
+  -2.0   // 23:00
+};
 
 // Boot and recovery settings
 #define MAX_BOOT_ATTEMPTS 3       // Max failed boots before entering safe mode
@@ -123,6 +154,8 @@ void logPrintf(LogLevel level, const char* format, ...) {
 // Forward declarations
 void printStatusReport();
 String generateStatusJSON();
+float getExpectedTemperature();
+float getEffectiveTemperature();
 
 // ===== AWS Signature V4 Functions =====
 // Adapted from: https://github.com/Mair/esp-aws-s3-auth-header
@@ -766,11 +799,54 @@ void readDHT22() {
   }
 }
 
+float getExpectedTemperature() {
+  // Get current hour from RTC
+  time_t now = time(nullptr);
+  if (now < 100000) {
+    // Time not synced, assume coldest hour (3 AM)
+    return WINTER_TEMP_TABLE[3];
+  }
+
+  struct tm timeinfo;
+  localtime_r(&now, &timeinfo);
+  int hour = timeinfo.tm_hour;
+
+  // Bounds check
+  if (hour < 0 || hour >= 24) {
+    hour = 0;
+  }
+
+  return WINTER_TEMP_TABLE[hour];
+}
+
+float getEffectiveTemperature() {
+  // If sensor is not working, use expected temperature
+  if (!dhtSensorWorking) {
+    float expectedTemp = getExpectedTemperature();
+    logPrintf(LOG_DEBUG, "DHT22 failed - using expected temperature: %.1f°C", expectedTemp);
+    return expectedTemp;
+  }
+
+  // If sensor reading is unreasonable (aberrant), use expected temperature
+  if (currentTemp > TEMP_MAX_REASONABLE || currentTemp < TEMP_MIN_REASONABLE) {
+    float expectedTemp = getExpectedTemperature();
+    logPrintf(LOG_WARNING, "DHT22 reading aberrant (%.1f°C) - using expected: %.1f°C",
+              currentTemp, expectedTemp);
+    logPrint(LOG_WARNING, "Possible cause: direct sunlight on sensor or sensor malfunction");
+    return expectedTemp;
+  }
+
+  // Sensor is working and value is reasonable
+  return currentTemp;
+}
+
 void updateBlanketControl() {
   // Blanket should be on if:
   // 1. Cat is present
   // 2. Temperature is below threshold
-  bool shouldBeOn = catPresent && (currentTemp < TEMP_COLD_THRESHOLD);
+  // Use effective temperature (with fallback if sensor fails)
+  float effectiveTemp = getEffectiveTemperature();
+  bool shouldBeOn = catPresent && (effectiveTemp < TEMP_COLD_THRESHOLD);
 
   // Apply debouncing: only change state if minimum time has elapsed
   unsigned long timeSinceLastChange = millis() - lastBlanketChange;
@@ -931,6 +1007,14 @@ String generateStatusJSON() {
   json += "  \"temperature_celsius\": " + String(currentTemp, 1) + ",\n";
   json += "  \"humidity_percent\": " + String(currentHumidity, 1) + ",\n";
   json += "  \"dht22_sensor_working\": " + String(dhtSensorWorking ? "true" : "false") + ",\n";
+
+  // Add effective temperature and expected temperature
+  float effectiveTemp = getEffectiveTemperature();
+  float expectedTemp = getExpectedTemperature();
+  json += "  \"effective_temperature_celsius\": " + String(effectiveTemp, 1) + ",\n";
+  json += "  \"expected_temperature_celsius\": " + String(expectedTemp, 1) + ",\n";
+  json += "  \"using_fallback_temperature\": " + String((effectiveTemp != currentTemp) ? "true" : "false") + ",\n";
+
   json += "  \"cat_present\": " + String(catPresent ? "true" : "false") + ",\n";
   json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
