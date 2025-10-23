@@ -287,7 +287,8 @@ void incrementBootAttempt() {
 void markBootSuccess() {
   logPrint(LOG_INFO, "Boot successful - resetting boot counter");
   bootAttempts = 0;
-  safeMode = false;
+  // Note: Don't clear runtime safeMode flag here - it should only change on reboot
+  // Only clear NVM so that next boot will attempt normal mode
   preferences.putInt("bootAttempts", 0);
   preferences.putBool("safeMode", false);
 }
