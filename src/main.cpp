@@ -9,6 +9,11 @@
 #include "esp_wifi.h"
 #include "secrets.h"  // WiFi credentials (not in git)
 
+// Default S3 folder if not defined in secrets.h (backward compatibility)
+#ifndef S3_FOLDER
+#define S3_FOLDER ""  // Empty string = root folder
+#endif
+
 // GPIO Pin Definitions
 #define RELAY_PIN 12        // Relay control for heated blanket
 #define PIR_PIN 13          // PIR motion sensor (cat detection)
@@ -47,8 +52,8 @@ DHT dht(DHT_PIN, DHT_TYPE);
 
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 10.0  // Turn on blanket if temp is below this and cat present
-#define TEMP_MAX_REASONABLE 30.0  // Maximum reasonable outdoor temperature (detect sensor errors)
-#define TEMP_MIN_REASONABLE -20.0 // Minimum reasonable outdoor temperature (detect sensor errors)
+#define TEMP_MAX_REASONABLE 45.0  // Maximum reasonable outdoor temperature (detect sensor errors)
+#define TEMP_MIN_REASONABLE -30.0 // Minimum reasonable outdoor temperature (detect sensor errors)
 
 // Typical winter temperatures for Pitesti, Romania (December-February) by hour (in Celsius)
 // Based on average winter nighttime lows (-5 to 5°C) and daytime highs (0 to 10°C)
@@ -470,11 +475,20 @@ bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
     return false;
   }
 
-  String uri = "/" + filename;
+  // Build S3 path with folder (if configured)
+  String uri = "/";
+  String logPath = "";
+  if (strlen(S3_FOLDER) > 0) {
+    uri += String(S3_FOLDER) + "/";
+    logPath = String(S3_FOLDER) + "/";
+  }
+  uri += filename;
+  logPath += filename;
+
   String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
   String url = "https://" + host + uri;
 
-  logPrintf(LOG_INFO, "Uploading photo to S3: %s", filename.c_str());
+  logPrintf(LOG_INFO, "Uploading photo to S3: %s", logPath.c_str());
 
   // Generate AWS Signature V4 authentication headers
   char authHeader[400];
@@ -558,12 +572,20 @@ bool uploadStatusToS3(const String& filename) {
   uint8_t* payload = (uint8_t*)statusJSON.c_str();
   size_t payload_len = statusJSON.length();
 
-  // Use same filename but with .json extension
-  String uri = "/" + filename;
+  // Build S3 path with folder (if configured, same as photo)
+  String uri = "/";
+  String logPath = "";
+  if (strlen(S3_FOLDER) > 0) {
+    uri += String(S3_FOLDER) + "/";
+    logPath = String(S3_FOLDER) + "/";
+  }
+  uri += filename;
+  logPath += filename;
+
   String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
   String url = "https://" + host + uri;
 
-  logPrintf(LOG_DEBUG, "Uploading status JSON to S3: %s", filename.c_str());
+  logPrintf(LOG_DEBUG, "Uploading status JSON to S3: %s", logPath.c_str());
 
   // Generate AWS Signature V4 authentication headers
   char authHeader[400];
@@ -695,8 +717,8 @@ void setup() {
       logPrint(LOG_WARNING, "Time sync failed - using default timestamp");
     }
 
-    // Disconnect WiFi to save power
-    disconnectWiFi();
+    // WiFi will disconnect automatically after idle timeout (don't force immediate disconnect)
+    logPrint(LOG_INFO, "WiFi will disconnect after idle timeout");
   } else {
     logPrint(LOG_WARNING, "WiFi failed - cannot sync time");
   }
