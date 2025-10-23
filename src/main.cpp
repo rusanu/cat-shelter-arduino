@@ -68,6 +68,7 @@ bool blanketOn = false;
 float currentTemp = 0.0;
 float currentHumidity = 0.0;
 unsigned long lastDHTRead = 0;
+bool dhtSensorWorking = true;  // Track DHT22 state for debounced error logging
 bool wifiConnected = false;
 unsigned long lastWiFiActivity = 0;  // Track last WiFi usage for idle timeout
 unsigned long lastPhotoTime = 0;  // Will be initialized in setup to allow first motion photo
@@ -727,8 +728,30 @@ void readDHT22() {
 
     // Check if readings are valid
     if (isnan(temp) || isnan(humidity)) {
-      logPrint(LOG_ERROR, "Failed to read from DHT22 sensor!");
+      // Only log error if sensor state changed from working to failed
+      if (dhtSensorWorking) {
+        logPrint(LOG_ERROR, "DHT22 sensor failure detected!");
+
+        // Provide detailed error information
+        if (isnan(temp) && isnan(humidity)) {
+          logPrint(LOG_ERROR, "Both temperature and humidity readings are NaN");
+          logPrint(LOG_WARNING, "Possible causes: sensor disconnected, power issue, or sensor failure");
+        } else if (isnan(temp)) {
+          logPrint(LOG_ERROR, "Temperature reading is NaN (humidity OK)");
+        } else {
+          logPrint(LOG_ERROR, "Humidity reading is NaN (temperature OK)");
+        }
+
+        logPrint(LOG_WARNING, "Check GPIO14 connection and DHT22 sensor");
+        dhtSensorWorking = false;
+      }
       return;
+    }
+
+    // Sensor is working - check if it just recovered
+    if (!dhtSensorWorking) {
+      logPrint(LOG_INFO, "DHT22 sensor recovered and working normally");
+      dhtSensorWorking = true;
     }
 
     // Update global state
@@ -890,6 +913,7 @@ String generateStatusJSON() {
   json += "  \"max_boot_attempts\": " + String(MAX_BOOT_ATTEMPTS) + ",\n";
   json += "  \"temperature_celsius\": " + String(currentTemp, 1) + ",\n";
   json += "  \"humidity_percent\": " + String(currentHumidity, 1) + ",\n";
+  json += "  \"dht22_sensor_working\": " + String(dhtSensorWorking ? "true" : "false") + ",\n";
   json += "  \"cat_present\": " + String(catPresent ? "true" : "false") + ",\n";
   json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
@@ -921,6 +945,7 @@ void printStatusReport() {
     Serial.printf("Boot attempts: %d/%d\n", bootAttempts, MAX_BOOT_ATTEMPTS);
     Serial.printf("Temperature: %.1f°C\n", currentTemp);
     Serial.printf("Humidity: %.1f%%\n", currentHumidity);
+    Serial.printf("DHT22 Sensor: %s\n", dhtSensorWorking ? "WORKING" : "FAILED");
     Serial.printf("Cat Present: %s\n", catPresent ? "YES" : "NO");
     Serial.printf("Blanket: %s\n", blanketOn ? "ON" : "OFF");
     Serial.printf("Camera: %s\n", cameraAvailable ? "AVAILABLE" : "DISABLED");
