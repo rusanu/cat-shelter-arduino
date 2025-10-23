@@ -43,6 +43,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define PHOTO_MOTION_COOLDOWN 300000   // 5 minutes in milliseconds
 #define STATUS_REPORT_INTERVAL 60000   // Status report every 60 seconds
 #define WIFI_IDLE_TIMEOUT 360000       // 6 minutes idle before WiFi disconnect (> motion cooldown)
+#define BLANKET_MIN_STATE_TIME 300000  // 5 minutes minimum time before blanket can change state
 
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 10.0  // Turn on blanket if temp is below this and cat present
@@ -65,6 +66,7 @@ LogLevel currentLogLevel = LOG_INFO;
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
+unsigned long lastBlanketChange = 0;  // Track when blanket last changed state for debouncing
 float currentTemp = 0.0;
 float currentHumidity = 0.0;
 unsigned long lastDHTRead = 0;
@@ -705,6 +707,7 @@ void checkPIRSensor() {
 void controlBlanket(bool shouldBeOn) {
   if (shouldBeOn != blanketOn) {
     blanketOn = shouldBeOn;
+    lastBlanketChange = millis();  // Record state change time
     digitalWrite(RELAY_PIN, blanketOn ? HIGH : LOW);
 
     if (blanketOn) {
@@ -768,7 +771,21 @@ void updateBlanketControl() {
   // 1. Cat is present
   // 2. Temperature is below threshold
   bool shouldBeOn = catPresent && (currentTemp < TEMP_COLD_THRESHOLD);
-  controlBlanket(shouldBeOn);
+
+  // Apply debouncing: only change state if minimum time has elapsed
+  unsigned long timeSinceLastChange = millis() - lastBlanketChange;
+
+  // If the desired state is different from current state
+  if (shouldBeOn != blanketOn) {
+    // Only change if enough time has passed since last change
+    if (timeSinceLastChange >= BLANKET_MIN_STATE_TIME) {
+      controlBlanket(shouldBeOn);
+    } else {
+      // Log at DEBUG level to avoid spam
+      unsigned long remainingTime = (BLANKET_MIN_STATE_TIME - timeSinceLastChange) / 1000;
+      logPrintf(LOG_DEBUG, "Blanket state change delayed (%lu seconds remaining)", remainingTime);
+    }
+  }
 }
 
 void takeAndUploadPhoto(const char* reason) {
