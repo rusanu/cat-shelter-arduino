@@ -87,6 +87,7 @@ const float WINTER_TEMP_TABLE[24] = {
 // Boot and recovery settings
 #define MAX_BOOT_ATTEMPTS 3       // Max failed boots before entering safe mode
 #define BOOT_SUCCESS_TIMEOUT 300000  // 5 minutes - if running this long, boot is successful
+#define SAFE_MODE_RECOVERY_INTERVAL 3600000  // 1 hour - attempt to exit safe mode and retry
 
 // Logging levels
 enum LogLevel {
@@ -120,6 +121,7 @@ bool safeMode = false;
 bool cameraAvailable = false;
 int bootAttempts = 0;
 unsigned long bootStartTime = 0;
+unsigned long lastSafeModeRecoveryAttempt = 0;  // Track recovery attempts in safe mode
 
 // Logging functions
 void logPrint(LogLevel level, const char* message) {
@@ -1120,6 +1122,31 @@ void loop() {
   // Check if we've been running successfully for long enough
   if (bootAttempts > 0 && (currentMillis - bootStartTime) >= BOOT_SUCCESS_TIMEOUT) {
     markBootSuccess();
+  }
+
+  // Safe mode automatic recovery - attempt to exit safe mode every hour
+  // Important for unattended operation over months
+  if (safeMode) {
+    // Initialize recovery timer on first safe mode entry
+    if (lastSafeModeRecoveryAttempt == 0) {
+      lastSafeModeRecoveryAttempt = currentMillis;
+    }
+
+    // Check if it's time to attempt recovery
+    if ((currentMillis - lastSafeModeRecoveryAttempt) >= SAFE_MODE_RECOVERY_INTERVAL) {
+      logPrint(LOG_WARNING, "Safe mode recovery attempt - resetting boot counter and rebooting");
+      logPrint(LOG_INFO, "System has been stable for 1 hour in safe mode");
+      logPrint(LOG_INFO, "Attempting to return to normal operation...");
+
+      // Reset boot counter and safe mode flag
+      markBootSuccess();
+
+      // Wait a moment for logs to flush
+      delay(1000);
+
+      // Reboot to try normal mode again
+      rebootSystem("Safe mode recovery attempt");
+    }
   }
 
   // Check WiFi idle timeout and disconnect if inactive
