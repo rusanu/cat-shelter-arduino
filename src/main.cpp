@@ -119,6 +119,7 @@ LogLevel currentLogLevel = LOG_INFO;
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
+bool blanketManualOverride = false;  // Track if blanket is in manual control mode
 unsigned long lastBlanketChange = 0;  // Track when blanket last changed state for debouncing
 unsigned long lastMotionDetected = 0;  // Track last PIR motion for presence timeout
 float currentTemp = 0.0;
@@ -126,6 +127,7 @@ float currentHumidity = 0.0;
 unsigned long lastDHTRead = 0;
 bool dhtSensorWorking = true;  // Track DHT22 state for debounced error logging
 bool wifiConnected = false;
+bool wifiManualOverride = false;  // Track if WiFi is in manual control mode
 unsigned long lastWiFiActivity = 0;  // Track last WiFi usage for idle timeout
 unsigned long lastPhotoTime = 0;  // Will be initialized in setup to allow first motion photo
 unsigned long lastHourlyPhotoTime = 0;  // Will be initialized in setup
@@ -1002,6 +1004,11 @@ float getEffectiveTemperature() {
 }
 
 void updateBlanketControl() {
+  // Skip automatic control if in manual override mode
+  if (blanketManualOverride) {
+    return;
+  }
+
   // Blanket should be on if:
   // 1. Cat is present
   // 2. Temperature is below threshold
@@ -1103,6 +1110,13 @@ void handleSerialCommands() {
       Serial.println("help or ?     - Show this help");
       Serial.println("status        - Print current status");
       Serial.println("snapshot      - Take and upload photo now");
+      Serial.println("blanket on    - Turn blanket ON (manual mode)");
+      Serial.println("blanket off   - Turn blanket OFF (manual mode)");
+      Serial.println("blanket auto  - Return to automatic blanket control");
+      Serial.println("wifi on       - Turn WiFi ON (manual mode)");
+      Serial.println("wifi off      - Turn WiFi OFF (manual mode)");
+      Serial.println("wifi auto     - Return to automatic WiFi control");
+      Serial.println("wifi strength - Monitor WiFi signal strength (press any key to stop)");
       Serial.println("loglevel <n>  - Set log level (0=ERROR, 1=WARN, 2=INFO, 3=DEBUG)");
       Serial.println("reboot        - Reboot system");
       Serial.println("safemode      - Enter safe mode");
@@ -1118,6 +1132,96 @@ void handleSerialCommands() {
         takeAndUploadPhoto("manual");
       } else {
         logPrint(LOG_ERROR, "Camera not available (safe mode or init failed)");
+      }
+    }
+    else if (command == "blanket on") {
+      blanketManualOverride = true;
+      controlBlanket(true);
+      logPrint(LOG_INFO, "Blanket MANUALLY turned ON (automatic control disabled)");
+    }
+    else if (command == "blanket off") {
+      blanketManualOverride = true;
+      controlBlanket(false);
+      logPrint(LOG_INFO, "Blanket MANUALLY turned OFF (automatic control disabled)");
+    }
+    else if (command == "blanket auto") {
+      blanketManualOverride = false;
+      logPrint(LOG_INFO, "Blanket returned to AUTOMATIC control");
+    }
+    else if (command == "wifi on") {
+      wifiManualOverride = true;
+      if (connectWiFi()) {
+        logPrint(LOG_INFO, "WiFi MANUALLY turned ON (automatic control disabled)");
+      } else {
+        logPrint(LOG_ERROR, "WiFi connection failed");
+      }
+    }
+    else if (command == "wifi off") {
+      wifiManualOverride = true;
+      disconnectWiFi();
+      logPrint(LOG_INFO, "WiFi MANUALLY turned OFF (automatic control disabled)");
+    }
+    else if (command == "wifi auto") {
+      wifiManualOverride = false;
+      logPrint(LOG_INFO, "WiFi returned to AUTOMATIC control (idle timeout enabled)");
+    }
+    else if (command == "wifi strength") {
+      // Check if WiFi is connected
+      if (!wifiConnected) {
+        Serial.println("WiFi not connected. Attempting to connect...");
+        if (!connectWiFi()) {
+          logPrint(LOG_ERROR, "Cannot monitor WiFi strength - connection failed");
+          return;
+        }
+      }
+
+      Serial.println("\n=== WiFi Signal Strength Monitor ===");
+      Serial.printf("Connected to: %s\n", WiFi.SSID().c_str());
+      Serial.println("Press any key to stop monitoring...\n");
+
+      unsigned long lastPrint = 0;
+      while (true) {
+        unsigned long currentMillis = millis();
+
+        // Check for key press to exit
+        if (Serial.available() > 0) {
+          // Clear the serial buffer
+          while (Serial.available() > 0) {
+            Serial.read();
+          }
+          Serial.println("\nMonitoring stopped.");
+          break;
+        }
+
+        // Print signal strength at most once per second
+        if (currentMillis - lastPrint >= 1000) {
+          lastPrint = currentMillis;
+
+          if (WiFi.status() == WL_CONNECTED) {
+            int rssi = WiFi.RSSI();
+            const char* quality;
+
+            // Interpret signal strength
+            if (rssi >= -50) {
+              quality = "Excellent";
+            } else if (rssi >= -60) {
+              quality = "Good";
+            } else if (rssi >= -70) {
+              quality = "Fair";
+            } else if (rssi >= -80) {
+              quality = "Weak";
+            } else {
+              quality = "Very Weak";
+            }
+
+            Serial.printf("Signal: %4d dBm  [%s]\n", rssi, quality);
+          } else {
+            Serial.println("WiFi disconnected!");
+            break;
+          }
+        }
+
+        delay(100);  // Small delay to avoid busy-waiting
       }
     }
     else if (command.startsWith("loglevel ")) {
@@ -1189,8 +1293,10 @@ String generateStatusJSON() {
   }
 
   json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
+  json += "  \"blanket_manual_override\": " + String(blanketManualOverride ? "true" : "false") + ",\n";
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
   json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false") + ",\n";
+  json += "  \"wifi_manual_override\": " + String(wifiManualOverride ? "true" : "false") + ",\n";
 
   // Memory status (for leak detection)
   json += "  \"heap_free_bytes\": " + String(ESP.getFreeHeap()) + ",\n";
@@ -1243,9 +1349,17 @@ void printStatusReport(bool forceImmediate) {
       }
     }
 
-    Serial.printf("Blanket: %s\n", blanketOn ? "ON" : "OFF");
+    if (blanketManualOverride) {
+      Serial.printf("Blanket: %s (MANUAL OVERRIDE)\n", blanketOn ? "ON" : "OFF");
+    } else {
+      Serial.printf("Blanket: %s (automatic)\n", blanketOn ? "ON" : "OFF");
+    }
     Serial.printf("Camera: %s\n", cameraAvailable ? "AVAILABLE" : "DISABLED");
-    Serial.printf("WiFi: %s\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
+    if (wifiManualOverride) {
+      Serial.printf("WiFi: %s (MANUAL OVERRIDE)\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
+    } else {
+      Serial.printf("WiFi: %s (automatic)\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
+    }
 
     // Memory status (for leak detection)
     Serial.println("--- Memory Status ---");
@@ -1301,8 +1415,8 @@ void loop() {
     }
   }
 
-  // Check WiFi idle timeout and disconnect if inactive
-  if (wifiConnected && (currentMillis - lastWiFiActivity) >= WIFI_IDLE_TIMEOUT) {
+  // Check WiFi idle timeout and disconnect if inactive (skip if in manual override mode)
+  if (!wifiManualOverride && wifiConnected && (currentMillis - lastWiFiActivity) >= WIFI_IDLE_TIMEOUT) {
     logPrint(LOG_INFO, "WiFi idle timeout - disconnecting to save power");
     disconnectWiFi();
   }
