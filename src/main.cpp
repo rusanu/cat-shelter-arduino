@@ -405,21 +405,83 @@ bool connectWiFi() {
     return true;
   }
 
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(WIFI_SSID);
+  Serial.println("Starting WiFi network scan...");
 
   // Disconnect first to ensure clean state
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   delay(500);
 
-  // Configure WiFi
+  // Configure WiFi for scanning
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
   WiFi.setHostname("cat-shelter");
 
+  // Scan for available networks
+  int networksFound = WiFi.scanNetworks();
+  Serial.printf("Found %d networks:\n", networksFound);
+
+  // List all networks with signal strength
+  Serial.println("\n=== Available WiFi Networks ===");
+  for (int i = 0; i < networksFound; i++) {
+    Serial.printf("  %2d: %-32s  %3d dBm  %s\n",
+                  i + 1,
+                  WiFi.SSID(i).c_str(),
+                  WiFi.RSSI(i),
+                  WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "OPEN" : "SECURED");
+  }
+  Serial.println("===============================\n");
+
+  // Find the best available known network
+  const char* selectedSSID = nullptr;
+  const char* selectedPassword = nullptr;
+  int bestRSSI = -1000;  // Very weak signal as baseline
+
+  Serial.println("Checking for known networks...");
+  for (int i = 0; i < KNOWN_NETWORKS_COUNT; i++) {
+    Serial.printf("  Looking for: %s... ", KNOWN_NETWORKS[i].ssid);
+
+    // Check if this known network is in the scan results
+    bool found = false;
+    for (int j = 0; j < networksFound; j++) {
+      if (WiFi.SSID(j) == String(KNOWN_NETWORKS[i].ssid)) {
+        int rssi = WiFi.RSSI(j);
+        Serial.printf("FOUND (signal: %d dBm)\n", rssi);
+        found = true;
+
+        // Select this network if it's the first one found or has better signal
+        if (selectedSSID == nullptr || rssi > bestRSSI) {
+          selectedSSID = KNOWN_NETWORKS[i].ssid;
+          selectedPassword = KNOWN_NETWORKS[i].password;
+          bestRSSI = rssi;
+        }
+        break;
+      }
+    }
+
+    if (!found) {
+      Serial.println("not found");
+    }
+  }
+
+  // Clean up scan results
+  WiFi.scanDelete();
+
+  // Check if we found any known network
+  if (selectedSSID == nullptr) {
+    Serial.println("\nERROR: No known networks available!");
+    Serial.println("Known networks:");
+    for (int i = 0; i < KNOWN_NETWORKS_COUNT; i++) {
+      Serial.printf("  - %s\n", KNOWN_NETWORKS[i].ssid);
+    }
+    return false;
+  }
+
+  // Connect to selected network
+  Serial.printf("\nConnecting to: %s (signal: %d dBm)\n", selectedSSID, bestRSSI);
+
   // Start WiFi connection
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.begin(selectedSSID, selectedPassword);
 
   // Configure underlying ESP-IDF layer to force WPA2-PSK
   wifi_config_t wifi_config = {};
@@ -443,7 +505,8 @@ bool connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     wifiConnected = true;
     lastWiFiActivity = millis();  // Track WiFi activity
-    Serial.println("\nWiFi connected!");
+    Serial.println("\nWiFi connected successfully!");
+    Serial.printf("SSID: %s\n", selectedSSID);
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
     Serial.print("Signal strength: ");
@@ -451,7 +514,7 @@ bool connectWiFi() {
     Serial.println(" dBm");
     return true;
   } else {
-    Serial.println("\nWiFi connection failed!");
+    Serial.printf("\nWiFi connection to %s failed!\n", selectedSSID);
     return false;
   }
 }
