@@ -180,6 +180,7 @@ void printStatusReport(bool forceImmediate = false);
 String generateStatusJSON();
 float getExpectedTemperature();
 float getEffectiveTemperature();
+void takeAndUploadPhoto(const char* reason);
 
 // ===== AWS Signature V4 Functions =====
 // Adapted from: https://github.com/Mair/esp-aws-s3-auth-header
@@ -838,6 +839,12 @@ void setup() {
   // Connect WiFi temporarily to sync time
   if (connectWiFi()) {
     syncTimeWithNTP(3);  // Try up to 3 times
+
+    // Take boot snapshot if camera is available and time is synced
+    if (cameraAvailable && time(nullptr) > 100000) {
+      logPrint(LOG_INFO, "Taking boot snapshot...");
+      takeAndUploadPhoto("boot");
+    }
 
     // WiFi will disconnect automatically after idle timeout (don't force immediate disconnect)
     logPrint(LOG_INFO, "WiFi will disconnect after idle timeout");
