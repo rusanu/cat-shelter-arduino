@@ -149,32 +149,49 @@ struct CameraConfig {
   bool colorbar;          // Color bar test pattern enable
 };
 
-// Default camera configuration (good starting values for outdoor shelter monitoring)
-CameraConfig getDefaultCameraConfig() {
+// Read current camera configuration from sensor (hardware truth)
+CameraConfig readCurrentCameraConfig() {
   CameraConfig config;
-  config.brightness = 0;        // Normal brightness
-  config.contrast = 0;          // Normal contrast
-  config.saturation = 0;        // Normal saturation
-  config.special_effect = 0;    // No effect
-  config.whitebal = true;       // Enable auto white balance
-  config.awb_gain = true;       // Enable AWB gain
-  config.wb_mode = 0;           // Auto mode
-  config.exposure_ctrl = true;  // Enable auto exposure
-  config.aec2 = false;          // Disable AEC2
-  config.ae_level = 0;          // Normal exposure level
-  config.aec_value = 300;       // Default AEC value
-  config.gain_ctrl = true;      // Enable auto gain
-  config.agc_gain = 0;          // Auto
-  config.gainceiling = 2;       // Moderate gain ceiling
-  config.bpc = false;           // Disable BPC
-  config.wpc = true;            // Enable WPC
-  config.raw_gma = true;        // Enable gamma
-  config.lenc = true;           // Enable lens correction
-  config.hmirror = false;       // No horizontal mirror
-  config.vflip = false;         // No vertical flip
-  config.dcw = true;            // Enable downsize
-  config.colorbar = false;      // No test pattern
+  sensor_t* s = esp_camera_sensor_get();
+
+  if (!s) {
+    logPrint(LOG_ERROR, "Failed to get camera sensor for reading config");
+    // Return empty config if sensor unavailable
+    memset(&config, 0, sizeof(config));
+    return config;
+  }
+
+  // Read actual sensor values
+  config.brightness = s->status.brightness;
+  config.contrast = s->status.contrast;
+  config.saturation = s->status.saturation;
+  config.special_effect = s->status.special_effect;
+  config.whitebal = s->status.awb;
+  config.awb_gain = s->status.awb_gain;
+  config.wb_mode = s->status.wb_mode;
+  config.exposure_ctrl = s->status.aec;
+  config.aec2 = s->status.aec2;
+  config.ae_level = s->status.ae_level;
+  config.aec_value = s->status.aec_value;
+  config.gain_ctrl = s->status.agc;
+  config.agc_gain = s->status.agc_gain;
+  config.gainceiling = s->status.gainceiling;
+  config.bpc = s->status.bpc;
+  config.wpc = s->status.wpc;
+  config.raw_gma = s->status.raw_gma;
+  config.lenc = s->status.lenc;
+  config.hmirror = s->status.hmirror;
+  config.vflip = s->status.vflip;
+  config.dcw = s->status.dcw;
+  config.colorbar = s->status.colorbar;
+
   return config;
+}
+
+// Get default camera configuration (read from sensor's initial state)
+CameraConfig getDefaultCameraConfig() {
+  // Default means "use sensor's own defaults" - just read current values
+  return readCurrentCameraConfig();
 }
 
 // Validate camera configuration values are in valid ranges
@@ -737,6 +754,154 @@ bool downloadFromS3(const String& filename, String& content, String& etag, Strin
 
     logPrintf(LOG_ERROR, "S3 download network error: %s", http.errorToString(httpResponseCode).c_str());
     return false;
+  }
+}
+
+// Upload JSON string to S3
+bool uploadJSONToS3(const String& jsonContent, const String& filename) {
+  // Ensure WiFi is connected
+  if (!connectWiFi()) {
+    return false;
+  }
+
+  // Verify time is set (required for AWS Signature V4)
+  time_t now = time(nullptr);
+  if (now < 100000) {
+    logPrint(LOG_ERROR, "Time not synchronized for S3 upload");
+    return false;
+  }
+
+  // Build S3 path with folder (if configured)
+  String uri = "/";
+  if (strlen(S3_FOLDER) > 0) {
+    uri += String(S3_FOLDER) + "/";
+  }
+  uri += filename;
+
+  String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
+  String url = "https://" + host + uri;
+
+  logPrintf(LOG_DEBUG, "Uploading JSON to S3: %s", filename.c_str());
+
+  // Generate AWS Signature V4 authentication headers
+  char authHeader[400];
+  char amzDate[18];
+  char payloadHash[65];
+
+  generateAWSSignatureV4("PUT", host.c_str(), uri.c_str(),
+                         AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+                         (const uint8_t*)jsonContent.c_str(), jsonContent.length(),
+                         authHeader, amzDate, payloadHash);
+
+  // Make authenticated request
+  HTTPClient http;
+  http.begin(url);
+
+  http.setConnectTimeout(10000);
+  http.setTimeout(30000);
+
+  http.addHeader("Host", host);
+  http.addHeader("x-amz-date", amzDate);
+  http.addHeader("x-amz-content-sha256", payloadHash);
+  http.addHeader("Authorization", authHeader);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Content-Length", String(jsonContent.length()));
+
+  int httpResponseCode = http.PUT((uint8_t*)jsonContent.c_str(), jsonContent.length());
+
+  http.end();
+
+  if (httpResponseCode >= 200 && httpResponseCode < 300) {
+    logPrintf(LOG_DEBUG, "JSON uploaded to S3: %s", filename.c_str());
+    return true;
+  } else {
+    logPrintf(LOG_WARNING, "JSON upload failed: HTTP %d for %s", httpResponseCode, filename.c_str());
+    return false;
+  }
+}
+
+// Load camera configuration at boot with cascade: S3 → NVM → defaults
+void loadCameraConfigAtBoot() {
+  logPrint(LOG_INFO, "Loading camera configuration...");
+
+  CameraConfig config;
+  String etag;
+  String errorMsg;
+  bool configLoaded = false;
+
+  // Step 1: Try to load from S3 (camera.json)
+  String s3Content;
+  String s3ETag;
+  if (downloadFromS3("camera.json", s3Content, s3ETag, errorMsg)) {
+    // S3 download successful - check if it's newer than NVM
+    String nvmETag;
+    CameraConfig nvmConfig;
+    String nvmError;
+
+    bool nvmExists = loadConfigFromNVM(nvmConfig, nvmETag, nvmError);
+
+    if (!nvmExists || s3ETag != nvmETag) {
+      // S3 is new or different from NVM - try to parse it
+      if (configFromJSON(s3Content, config, errorMsg)) {
+        logPrintf(LOG_INFO, "Loaded camera config from S3 (ETag: %s)", s3ETag.c_str());
+        cameraConfigSource = "s3";
+        cameraConfigETag = s3ETag;
+        configLoaded = true;
+
+        // Save to NVM for future use
+        saveConfigToNVM(config, s3ETag);
+      } else {
+        logPrintf(LOG_ERROR, "S3 config parse error: %s", errorMsg.c_str());
+        // Fall through to try NVM
+      }
+    } else {
+      logPrintf(LOG_INFO, "S3 config unchanged (ETag: %s), using NVM", s3ETag.c_str());
+      config = nvmConfig;
+      cameraConfigSource = "s3-cached";
+      cameraConfigETag = nvmETag;
+      configLoaded = true;
+    }
+  } else {
+    logPrintf(LOG_DEBUG, "S3 config not available: %s", errorMsg.c_str());
+  }
+
+  // Step 2: If S3 failed, try NVM
+  if (!configLoaded) {
+    if (loadConfigFromNVM(config, etag, errorMsg)) {
+      logPrintf(LOG_INFO, "Loaded camera config from NVM (ETag: %s)", etag.c_str());
+      cameraConfigSource = "s3-cached";
+      cameraConfigETag = etag;
+      configLoaded = true;
+    } else {
+      logPrintf(LOG_DEBUG, "NVM config not available: %s", errorMsg.c_str());
+    }
+  }
+
+  // Step 3: If both failed, use defaults
+  if (!configLoaded) {
+    config = getDefaultCameraConfig();
+    logPrint(LOG_INFO, "Using default camera configuration");
+    cameraConfigSource = "default";
+    cameraConfigETag = "";
+  }
+
+  // Apply the configuration (unless using defaults, which means don't modify sensor)
+  if (cameraAvailable && configLoaded) {
+    if (!applyCameraConfig(config)) {
+      logPrint(LOG_ERROR, "Failed to apply camera configuration");
+    }
+  }
+
+  // Read back actual sensor values (hardware truth) and upload as camera.use.json
+  if (cameraAvailable) {
+    CameraConfig actualConfig = readCurrentCameraConfig();
+    currentCameraConfig = actualConfig;
+
+    String useJSON = configToJSON(actualConfig);
+    uploadJSONToS3(useJSON, "camera.use.json");
+  } else {
+    // Camera not available - just store what we have
+    currentCameraConfig = config;
   }
 }
 
@@ -1307,6 +1472,9 @@ void setup() {
   if (connectWiFi()) {
     syncTimeWithNTP(3);  // Try up to 3 times
 
+    // Load camera configuration (S3 → NVM → defaults)
+    loadCameraConfigAtBoot();
+
     // Take boot snapshot if camera is available and time is synced
     if (cameraAvailable && time(nullptr) > 100000) {
       logPrint(LOG_INFO, "Taking boot snapshot...");
@@ -1317,6 +1485,9 @@ void setup() {
     logPrint(LOG_INFO, "WiFi will remain connected (continuous power mode)");
   } else {
     logPrint(LOG_WARNING, "WiFi failed - cannot sync time");
+
+    // No WiFi - load camera config from NVM or defaults
+    loadCameraConfigAtBoot();
   }
 
   if (safeMode) {
@@ -1760,6 +1931,10 @@ String generateStatusJSON() {
   json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
   json += "  \"blanket_manual_override\": " + String(blanketManualOverride ? "true" : "false") + ",\n";
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
+  json += "  \"camera_config_source\": \"" + cameraConfigSource + "\",\n";
+  if (cameraConfigETag.length() > 0) {
+    json += "  \"camera_config_etag\": \"" + cameraConfigETag + "\",\n";
+  }
   json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false") + ",\n";
   json += "  \"wifi_manual_override\": " + String(wifiManualOverride ? "true" : "false") + ",\n";
 
@@ -1820,6 +1995,13 @@ void printStatusReport(bool forceImmediate) {
       Serial.printf("Blanket: %s (automatic)\n", blanketOn ? "ON" : "OFF");
     }
     Serial.printf("Camera: %s\n", cameraAvailable ? "AVAILABLE" : "DISABLED");
+    if (cameraAvailable) {
+      Serial.printf("Camera Config: %s", cameraConfigSource.c_str());
+      if (cameraConfigETag.length() > 0) {
+        Serial.printf(" (ETag: %s)", cameraConfigETag.c_str());
+      }
+      Serial.println();
+    }
     if (wifiManualOverride) {
       Serial.printf("WiFi: %s (MANUAL OVERRIDE)\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
     } else {
