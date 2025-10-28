@@ -1084,7 +1084,15 @@ bool initCamera() {
     return false;
   }
 
-  Serial.println("Camera initialized successfully");
+  // Apply physical mounting correction - camera is mounted upside down
+  sensor_t* s = esp_camera_sensor_get();
+  if (s) {
+    s->set_vflip(s, 1);  // Flip vertically for upside-down mounting
+    Serial.println("Camera initialized successfully (vflip applied for mounting)");
+  } else {
+    Serial.println("Camera initialized successfully (warning: could not apply vflip)");
+  }
+
   return true;
 }
 
@@ -1104,7 +1112,19 @@ camera_fb_t* capturePhoto() {
   // Delay for camera sensors to adjust to lighting
   delay(200);
 
-  // Capture photo
+  // When using 2 frame buffers (PSRAM mode), the first frame can be stale
+  // Discard first frame and get a fresh one
+  if (psramFound()) {
+    camera_fb_t* fbDiscard = esp_camera_fb_get();
+    if (fbDiscard) {
+      esp_camera_fb_return(fbDiscard);
+      logPrint(LOG_DEBUG, "Discarded buffered frame (2-buffer mode)");
+    }
+    // Small delay to ensure new frame is captured
+    delay(50);
+  }
+
+  // Capture photo (fresh frame in 2-buffer mode)
   camera_fb_t* fb = esp_camera_fb_get();
 
   // Turn off flash immediately after capture

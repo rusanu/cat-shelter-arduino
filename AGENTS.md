@@ -26,6 +26,7 @@ The onboard camera and wifi are functional and used by the project. The SD card 
 - if you need to generate temporary or debug files, do not place them in the project folder. Use %TMP%
 
 
+
 ## Issue Tracking with bd (beads)
 
 **IMPORTANT**: This project uses **bd (beads)** for ALL issue tracking. Do NOT use markdown TODOs, task lists, or other tracking methods.
