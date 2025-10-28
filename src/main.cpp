@@ -253,6 +253,190 @@ bool applyCameraConfig(const CameraConfig& config) {
   return true;
 }
 
+// Serialize camera config to JSON string
+String configToJSON(const CameraConfig& config) {
+  JsonDocument doc;
+
+  doc["brightness"] = config.brightness;
+  doc["contrast"] = config.contrast;
+  doc["saturation"] = config.saturation;
+  doc["special_effect"] = config.special_effect;
+  doc["whitebal"] = config.whitebal;
+  doc["awb_gain"] = config.awb_gain;
+  doc["wb_mode"] = config.wb_mode;
+  doc["exposure_ctrl"] = config.exposure_ctrl;
+  doc["aec2"] = config.aec2;
+  doc["ae_level"] = config.ae_level;
+  doc["aec_value"] = config.aec_value;
+  doc["gain_ctrl"] = config.gain_ctrl;
+  doc["agc_gain"] = config.agc_gain;
+  doc["gainceiling"] = config.gainceiling;
+  doc["bpc"] = config.bpc;
+  doc["wpc"] = config.wpc;
+  doc["raw_gma"] = config.raw_gma;
+  doc["lenc"] = config.lenc;
+  doc["hmirror"] = config.hmirror;
+  doc["vflip"] = config.vflip;
+  doc["dcw"] = config.dcw;
+  doc["colorbar"] = config.colorbar;
+
+  String output;
+  serializeJson(doc, output);
+  return output;
+}
+
+// Deserialize JSON string to camera config
+bool configFromJSON(const String& jsonStr, CameraConfig& config, String& errorMsg) {
+  JsonDocument doc;
+
+  DeserializationError error = deserializeJson(doc, jsonStr);
+  if (error) {
+    errorMsg = "JSON parse error: ";
+    errorMsg += error.c_str();
+    return false;
+  }
+
+  // Parse all fields with type checking
+  if (!doc["brightness"].is<int>()) {
+    errorMsg = "Missing or invalid 'brightness' field";
+    return false;
+  }
+  config.brightness = doc["brightness"];
+
+  if (!doc["contrast"].is<int>()) {
+    errorMsg = "Missing or invalid 'contrast' field";
+    return false;
+  }
+  config.contrast = doc["contrast"];
+
+  if (!doc["saturation"].is<int>()) {
+    errorMsg = "Missing or invalid 'saturation' field";
+    return false;
+  }
+  config.saturation = doc["saturation"];
+
+  if (!doc["special_effect"].is<int>()) {
+    errorMsg = "Missing or invalid 'special_effect' field";
+    return false;
+  }
+  config.special_effect = doc["special_effect"];
+
+  if (!doc["whitebal"].is<bool>()) {
+    errorMsg = "Missing or invalid 'whitebal' field";
+    return false;
+  }
+  config.whitebal = doc["whitebal"];
+
+  if (!doc["awb_gain"].is<bool>()) {
+    errorMsg = "Missing or invalid 'awb_gain' field";
+    return false;
+  }
+  config.awb_gain = doc["awb_gain"];
+
+  if (!doc["wb_mode"].is<int>()) {
+    errorMsg = "Missing or invalid 'wb_mode' field";
+    return false;
+  }
+  config.wb_mode = doc["wb_mode"];
+
+  if (!doc["exposure_ctrl"].is<bool>()) {
+    errorMsg = "Missing or invalid 'exposure_ctrl' field";
+    return false;
+  }
+  config.exposure_ctrl = doc["exposure_ctrl"];
+
+  if (!doc["aec2"].is<bool>()) {
+    errorMsg = "Missing or invalid 'aec2' field";
+    return false;
+  }
+  config.aec2 = doc["aec2"];
+
+  if (!doc["ae_level"].is<int>()) {
+    errorMsg = "Missing or invalid 'ae_level' field";
+    return false;
+  }
+  config.ae_level = doc["ae_level"];
+
+  if (!doc["aec_value"].is<int>()) {
+    errorMsg = "Missing or invalid 'aec_value' field";
+    return false;
+  }
+  config.aec_value = doc["aec_value"];
+
+  if (!doc["gain_ctrl"].is<bool>()) {
+    errorMsg = "Missing or invalid 'gain_ctrl' field";
+    return false;
+  }
+  config.gain_ctrl = doc["gain_ctrl"];
+
+  if (!doc["agc_gain"].is<int>()) {
+    errorMsg = "Missing or invalid 'agc_gain' field";
+    return false;
+  }
+  config.agc_gain = doc["agc_gain"];
+
+  if (!doc["gainceiling"].is<int>()) {
+    errorMsg = "Missing or invalid 'gainceiling' field";
+    return false;
+  }
+  config.gainceiling = doc["gainceiling"];
+
+  if (!doc["bpc"].is<bool>()) {
+    errorMsg = "Missing or invalid 'bpc' field";
+    return false;
+  }
+  config.bpc = doc["bpc"];
+
+  if (!doc["wpc"].is<bool>()) {
+    errorMsg = "Missing or invalid 'wpc' field";
+    return false;
+  }
+  config.wpc = doc["wpc"];
+
+  if (!doc["raw_gma"].is<bool>()) {
+    errorMsg = "Missing or invalid 'raw_gma' field";
+    return false;
+  }
+  config.raw_gma = doc["raw_gma"];
+
+  if (!doc["lenc"].is<bool>()) {
+    errorMsg = "Missing or invalid 'lenc' field";
+    return false;
+  }
+  config.lenc = doc["lenc"];
+
+  if (!doc["hmirror"].is<bool>()) {
+    errorMsg = "Missing or invalid 'hmirror' field";
+    return false;
+  }
+  config.hmirror = doc["hmirror"];
+
+  if (!doc["vflip"].is<bool>()) {
+    errorMsg = "Missing or invalid 'vflip' field";
+    return false;
+  }
+  config.vflip = doc["vflip"];
+
+  if (!doc["dcw"].is<bool>()) {
+    errorMsg = "Missing or invalid 'dcw' field";
+    return false;
+  }
+  config.dcw = doc["dcw"];
+
+  if (!doc["colorbar"].is<bool>()) {
+    errorMsg = "Missing or invalid 'colorbar' field";
+    return false;
+  }
+  config.colorbar = doc["colorbar"];
+
+  // Validate the parsed config
+  if (!validateCameraConfig(config, errorMsg)) {
+    return false;
+  }
+
+  return true;
+}
+
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
