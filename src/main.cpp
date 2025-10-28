@@ -437,6 +437,55 @@ bool configFromJSON(const String& jsonStr, CameraConfig& config, String& errorMs
   return true;
 }
 
+// Save camera config to NVM (non-volatile memory) with ETag
+bool saveConfigToNVM(const CameraConfig& config, const String& etag) {
+  Preferences prefs;
+  prefs.begin("cam-config", false);
+
+  // Serialize config to JSON
+  String jsonStr = configToJSON(config);
+
+  // Save JSON string and ETag
+  bool success = true;
+  success &= prefs.putString("config", jsonStr);
+  success &= prefs.putString("etag", etag);
+
+  prefs.end();
+
+  if (success) {
+    logPrintf(LOG_INFO, "Camera config saved to NVM (etag: %s)", etag.c_str());
+  } else {
+    logPrint(LOG_ERROR, "Failed to save camera config to NVM");
+  }
+
+  return success;
+}
+
+// Load camera config from NVM with ETag
+bool loadConfigFromNVM(CameraConfig& config, String& etag, String& errorMsg) {
+  Preferences prefs;
+  prefs.begin("cam-config", true);  // Read-only mode
+
+  String jsonStr = prefs.getString("config", "");
+  etag = prefs.getString("etag", "");
+
+  prefs.end();
+
+  if (jsonStr.isEmpty()) {
+    errorMsg = "No camera config found in NVM";
+    return false;
+  }
+
+  // Deserialize JSON
+  if (!configFromJSON(jsonStr, config, errorMsg)) {
+    logPrintf(LOG_ERROR, "Failed to parse NVM config: %s", errorMsg.c_str());
+    return false;
+  }
+
+  logPrintf(LOG_INFO, "Camera config loaded from NVM (etag: %s)", etag.c_str());
+  return true;
+}
+
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
@@ -462,6 +511,11 @@ bool cameraAvailable = false;
 int bootAttempts = 0;
 unsigned long bootStartTime = 0;
 unsigned long lastSafeModeRecoveryAttempt = 0;  // Track recovery attempts in safe mode
+
+// Camera configuration state
+CameraConfig currentCameraConfig;
+String cameraConfigSource = "default";  // "default", "nvm", or "s3"
+String cameraConfigETag = "";  // ETag of the config currently in use
 
 // Logging functions
 void logPrintf(LogLevel level, const char* format, ...) {
