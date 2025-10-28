@@ -59,8 +59,8 @@ DHT dht(DHT_PIN, DHT_TYPE);
 
 // Timing constants
 #define DHT_READ_INTERVAL 2000  // Read DHT22 every 2 seconds
-#define PHOTO_HOURLY_INTERVAL 3600000  // 60 minutes in milliseconds
-#define PHOTO_MOTION_COOLDOWN 300000   // 5 minutes in milliseconds
+#define PHOTO_HOURLY_INTERVAL 600000   // 10 minutes in milliseconds (continuous power available)
+#define PHOTO_MOTION_COOLDOWN 60000    // 1 minute in milliseconds (continuous power available)
 #define STATUS_REPORT_INTERVAL 60000   // Status report every 60 seconds
 #define WIFI_IDLE_TIMEOUT 360000       // 6 minutes idle before WiFi disconnect (> motion cooldown)
 #define BLANKET_MIN_STATE_TIME 300000  // 5 minutes minimum time before blanket can change state
