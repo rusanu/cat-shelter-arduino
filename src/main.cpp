@@ -533,6 +533,8 @@ unsigned long lastSafeModeRecoveryAttempt = 0;  // Track recovery attempts in sa
 CameraConfig currentCameraConfig;
 String cameraConfigSource = "default";  // "default", "nvm", or "s3"
 String cameraConfigETag = "";  // ETag of the config currently in use
+unsigned long lastCameraConfigCheck = 0;  // Track last time we checked S3 for config updates
+#define CAMERA_CONFIG_CHECK_INTERVAL 3600000  // 60 minutes in milliseconds
 
 // Logging functions
 void logPrintf(LogLevel level, const char* format, ...) {
@@ -902,6 +904,59 @@ void loadCameraConfigAtBoot() {
   } else {
     // Camera not available - just store what we have
     currentCameraConfig = config;
+  }
+}
+
+// Check for camera config updates from S3 (called periodically)
+void checkCameraConfigUpdate() {
+  // Only check if camera is available and WiFi connected
+  if (!cameraAvailable || !wifiConnected) {
+    return;
+  }
+
+  logPrint(LOG_DEBUG, "Checking S3 for camera config updates...");
+
+  String s3Content;
+  String s3ETag;
+  String errorMsg;
+
+  if (downloadFromS3("camera.json", s3Content, s3ETag, errorMsg)) {
+    // Check if ETag changed
+    if (s3ETag != cameraConfigETag) {
+      logPrintf(LOG_INFO, "New camera config detected (ETag: %s -> %s)",
+                cameraConfigETag.c_str(), s3ETag.c_str());
+
+      // Try to parse new config
+      CameraConfig newConfig;
+      if (configFromJSON(s3Content, newConfig, errorMsg)) {
+        // Apply new configuration
+        if (applyCameraConfig(newConfig)) {
+          logPrint(LOG_INFO, "New camera configuration applied successfully");
+
+          // Update state
+          cameraConfigSource = "s3";
+          cameraConfigETag = s3ETag;
+
+          // Save to NVM
+          saveConfigToNVM(newConfig, s3ETag);
+
+          // Read back actual hardware values and upload
+          CameraConfig actualConfig = readCurrentCameraConfig();
+          currentCameraConfig = actualConfig;
+
+          String useJSON = configToJSON(actualConfig);
+          uploadJSONToS3(useJSON, "camera.use.json");
+        } else {
+          logPrint(LOG_ERROR, "Failed to apply new camera configuration");
+        }
+      } else {
+        logPrintf(LOG_ERROR, "Invalid camera config from S3: %s", errorMsg.c_str());
+      }
+    } else {
+      logPrint(LOG_DEBUG, "Camera config unchanged");
+    }
+  } else {
+    logPrintf(LOG_DEBUG, "Camera config check failed: %s", errorMsg.c_str());
   }
 }
 
@@ -1446,6 +1501,9 @@ void setup() {
   // Set lastPhotoTime far enough in the past to exceed cooldown period
   lastPhotoTime = millis() - PHOTO_MOTION_COOLDOWN - 1000;
   lastHourlyPhotoTime = millis();  // Start counting from boot for scheduled photos
+
+  // Initialize camera config check timer (starts counting from boot)
+  lastCameraConfigCheck = millis();
 
   // Initialize camera (allow failure in safe mode)
   if (safeMode) {
@@ -2078,6 +2136,12 @@ void loop() {
 
   // Check if it's time to take and upload a photo
   checkPhotoSchedule();
+
+  // Check for camera config updates from S3 (every 60 minutes)
+  if ((currentMillis - lastCameraConfigCheck) >= CAMERA_CONFIG_CHECK_INTERVAL) {
+    lastCameraConfigCheck = currentMillis;
+    checkCameraConfigUpdate();
+  }
 
   // Print periodic status report
   printStatusReport();
