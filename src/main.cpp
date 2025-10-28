@@ -20,6 +20,7 @@
 #include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
 #include <Preferences.h>
+#include <ArduinoJson.h>
 #include "esp_camera.h"
 #include "esp_wifi.h"
 #include "secrets.h"  // WiFi credentials (not in git)
@@ -116,6 +117,142 @@ enum LogLevel {
 // Current log level (can be changed via serial commands)
 LogLevel currentLogLevel = LOG_INFO;
 
+// Forward declaration for logging (needed before macro)
+void logPrintf(LogLevel level, const char* format, ...);
+
+// Logging macro - logPrint implemented as macro using logPrintf
+#define logPrint(level, msg) logPrintf(level, "%s", msg)
+
+// Camera configuration structure
+struct CameraConfig {
+  int8_t brightness;      // -2 to 2
+  int8_t contrast;        // -2 to 2
+  int8_t saturation;      // -2 to 2
+  uint8_t special_effect; // 0-6 (0=None, 1=Negative, 2=Grayscale, 3=Red, 4=Green, 5=Blue, 6=Sepia)
+  bool whitebal;          // White balance enable
+  bool awb_gain;          // Auto white balance gain enable
+  uint8_t wb_mode;        // 0-4 (0=Auto, 1=Sunny, 2=Cloudy, 3=Office, 4=Home)
+  bool exposure_ctrl;     // Auto exposure control enable
+  bool aec2;              // AEC2 enable
+  int8_t ae_level;        // -2 to 2
+  uint16_t aec_value;     // 0 to 1200
+  bool gain_ctrl;         // Auto gain control enable
+  uint8_t agc_gain;       // 0 to 30
+  uint8_t gainceiling;    // 0 to 6
+  bool bpc;               // Black pixel correction enable
+  bool wpc;               // White pixel correction enable
+  bool raw_gma;           // Raw gamma enable
+  bool lenc;              // Lens correction enable
+  bool hmirror;           // Horizontal mirror
+  bool vflip;             // Vertical flip
+  bool dcw;               // Downsize enable
+  bool colorbar;          // Color bar test pattern enable
+};
+
+// Default camera configuration (good starting values for outdoor shelter monitoring)
+CameraConfig getDefaultCameraConfig() {
+  CameraConfig config;
+  config.brightness = 0;        // Normal brightness
+  config.contrast = 0;          // Normal contrast
+  config.saturation = 0;        // Normal saturation
+  config.special_effect = 0;    // No effect
+  config.whitebal = true;       // Enable auto white balance
+  config.awb_gain = true;       // Enable AWB gain
+  config.wb_mode = 0;           // Auto mode
+  config.exposure_ctrl = true;  // Enable auto exposure
+  config.aec2 = false;          // Disable AEC2
+  config.ae_level = 0;          // Normal exposure level
+  config.aec_value = 300;       // Default AEC value
+  config.gain_ctrl = true;      // Enable auto gain
+  config.agc_gain = 0;          // Auto
+  config.gainceiling = 2;       // Moderate gain ceiling
+  config.bpc = false;           // Disable BPC
+  config.wpc = true;            // Enable WPC
+  config.raw_gma = true;        // Enable gamma
+  config.lenc = true;           // Enable lens correction
+  config.hmirror = false;       // No horizontal mirror
+  config.vflip = false;         // No vertical flip
+  config.dcw = true;            // Enable downsize
+  config.colorbar = false;      // No test pattern
+  return config;
+}
+
+// Validate camera configuration values are in valid ranges
+bool validateCameraConfig(const CameraConfig& config, String& errorMsg) {
+  if (config.brightness < -2 || config.brightness > 2) {
+    errorMsg = "brightness must be -2 to 2";
+    return false;
+  }
+  if (config.contrast < -2 || config.contrast > 2) {
+    errorMsg = "contrast must be -2 to 2";
+    return false;
+  }
+  if (config.saturation < -2 || config.saturation > 2) {
+    errorMsg = "saturation must be -2 to 2";
+    return false;
+  }
+  if (config.special_effect > 6) {
+    errorMsg = "special_effect must be 0 to 6";
+    return false;
+  }
+  if (config.wb_mode > 4) {
+    errorMsg = "wb_mode must be 0 to 4";
+    return false;
+  }
+  if (config.ae_level < -2 || config.ae_level > 2) {
+    errorMsg = "ae_level must be -2 to 2";
+    return false;
+  }
+  if (config.aec_value > 1200) {
+    errorMsg = "aec_value must be 0 to 1200";
+    return false;
+  }
+  if (config.agc_gain > 30) {
+    errorMsg = "agc_gain must be 0 to 30";
+    return false;
+  }
+  if (config.gainceiling > 6) {
+    errorMsg = "gainceiling must be 0 to 6";
+    return false;
+  }
+  return true;
+}
+
+// Apply camera configuration to the camera sensor
+bool applyCameraConfig(const CameraConfig& config) {
+  sensor_t* s = esp_camera_sensor_get();
+  if (!s) {
+    logPrint(LOG_ERROR, "Failed to get camera sensor");
+    return false;
+  }
+
+  s->set_brightness(s, config.brightness);
+  s->set_contrast(s, config.contrast);
+  s->set_saturation(s, config.saturation);
+  s->set_special_effect(s, config.special_effect);
+  s->set_whitebal(s, config.whitebal ? 1 : 0);
+  s->set_awb_gain(s, config.awb_gain ? 1 : 0);
+  s->set_wb_mode(s, config.wb_mode);
+  s->set_exposure_ctrl(s, config.exposure_ctrl ? 1 : 0);
+  s->set_aec2(s, config.aec2 ? 1 : 0);
+  s->set_ae_level(s, config.ae_level);
+  s->set_aec_value(s, config.aec_value);
+  s->set_gain_ctrl(s, config.gain_ctrl ? 1 : 0);
+  s->set_agc_gain(s, config.agc_gain);
+  s->set_gainceiling(s, (gainceiling_t)config.gainceiling);
+  s->set_bpc(s, config.bpc ? 1 : 0);
+  s->set_wpc(s, config.wpc ? 1 : 0);
+  s->set_raw_gma(s, config.raw_gma ? 1 : 0);
+  s->set_lenc(s, config.lenc ? 1 : 0);
+  s->set_hmirror(s, config.hmirror ? 1 : 0);
+  s->set_vflip(s, config.vflip ? 1 : 0);
+  s->set_dcw(s, config.dcw ? 1 : 0);
+  s->set_colorbar(s, config.colorbar ? 1 : 0);
+
+  logPrint(LOG_INFO, "Camera configuration applied successfully");
+  return true;
+}
+
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
@@ -143,20 +280,6 @@ unsigned long bootStartTime = 0;
 unsigned long lastSafeModeRecoveryAttempt = 0;  // Track recovery attempts in safe mode
 
 // Logging functions
-void logPrint(LogLevel level, const char* message) {
-  if (level <= currentLogLevel) {
-    const char* prefix = "";
-    switch (level) {
-      case LOG_ERROR:   prefix = "[ERROR] "; break;
-      case LOG_WARNING: prefix = "[WARN]  "; break;
-      case LOG_INFO:    prefix = "[INFO]  "; break;
-      case LOG_DEBUG:   prefix = "[DEBUG] "; break;
-    }
-    Serial.print(prefix);
-    Serial.println(message);
-  }
-}
-
 void logPrintf(LogLevel level, const char* format, ...) {
   if (level <= currentLogLevel) {
     const char* prefix = "";
