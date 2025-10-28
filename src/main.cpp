@@ -539,6 +539,7 @@ void logPrintf(LogLevel level, const char* format, ...) {
 }
 
 // Forward declarations
+bool connectWiFi();
 void printStatusReport(bool forceImmediate = false);
 String generateStatusJSON();
 float getExpectedTemperature();
@@ -634,6 +635,109 @@ void generateAWSSignatureV4(const char *method, const char *host, const char *ur
   // Step 5: Build authorization header
   sprintf(outAuthHeader, "%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",
           algorithm, accessKey, credentialScope, signedHeaders, signatureStr);
+}
+
+// Download file from S3 with AWS Signature V4 authentication
+// Returns true on success, false on failure (including 404)
+// On success: content contains file data, etag contains ETag header
+bool downloadFromS3(const String& filename, String& content, String& etag, String& errorMsg) {
+  // Ensure WiFi is connected
+  if (!connectWiFi()) {
+    errorMsg = "WiFi not connected";
+    return false;
+  }
+
+  // Verify time is set (required for AWS Signature V4)
+  time_t now = time(nullptr);
+  if (now < 100000) {
+    errorMsg = "Time not synchronized";
+    return false;
+  }
+
+  // Build S3 path with folder (if configured)
+  String uri = "/";
+  if (strlen(S3_FOLDER) > 0) {
+    uri += String(S3_FOLDER) + "/";
+  }
+  uri += filename;
+
+  String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
+  String url = "https://" + host + uri;
+
+  logPrintf(LOG_DEBUG, "Downloading from S3: %s", uri.c_str());
+
+  // Generate AWS Signature V4 authentication headers for GET
+  char authHeader[400];
+  char amzDate[18];
+  char payloadHash[65];
+
+  // For GET, payload is empty
+  const uint8_t emptyPayload[] = "";
+  generateAWSSignatureV4("GET", host.c_str(), uri.c_str(),
+                         AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+                         emptyPayload, 0,
+                         authHeader, amzDate, payloadHash);
+
+  // Make authenticated GET request
+  HTTPClient http;
+  http.begin(url);
+
+  // Set timeouts
+  http.setConnectTimeout(10000);  // 10 seconds to establish connection
+  http.setTimeout(30000);         // 30 seconds for data transfer
+
+  http.addHeader("Host", host);
+  http.addHeader("x-amz-date", amzDate);
+  http.addHeader("x-amz-content-sha256", payloadHash);
+  http.addHeader("Authorization", authHeader);
+
+  logPrint(LOG_DEBUG, "Sending GET request with AWS Signature V4...");
+
+  int httpResponseCode = http.GET();
+
+  if (httpResponseCode == 200) {
+    // Success - get content and ETag
+    content = http.getString();
+    etag = http.header("ETag");
+
+    // Remove quotes from ETag if present
+    if (etag.startsWith("\"") && etag.endsWith("\"")) {
+      etag = etag.substring(1, etag.length() - 1);
+    }
+
+    http.end();
+    logPrintf(LOG_INFO, "Downloaded from S3: %s (%d bytes, ETag: %s)",
+              filename.c_str(), content.length(), etag.c_str());
+    return true;
+  } else if (httpResponseCode == 404) {
+    // File not found - not an error, just doesn't exist
+    http.end();
+    errorMsg = "File not found (404)";
+    logPrintf(LOG_DEBUG, "S3 file not found: %s", filename.c_str());
+    return false;
+  } else if (httpResponseCode > 0) {
+    // Got HTTP response but it's an error
+    String responseBody = http.getString();
+    http.end();
+
+    errorMsg = "HTTP ";
+    errorMsg += String(httpResponseCode);
+    if (responseBody.length() > 0 && responseBody.length() <= 200) {
+      errorMsg += ": ";
+      errorMsg += responseBody;
+    }
+
+    logPrintf(LOG_ERROR, "S3 download failed: HTTP %d for %s", httpResponseCode, filename.c_str());
+    return false;
+  } else {
+    // Network/connection error
+    errorMsg = "Network error: ";
+    errorMsg += http.errorToString(httpResponseCode);
+    http.end();
+
+    logPrintf(LOG_ERROR, "S3 download network error: %s", http.errorToString(httpResponseCode).c_str());
+    return false;
+  }
 }
 
 // ===== End AWS Signature V4 Functions =====
