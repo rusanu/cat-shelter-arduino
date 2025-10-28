@@ -864,10 +864,22 @@ void loadCameraConfigAtBoot() {
       configLoaded = true;
     }
   } else {
-    logPrintf(LOG_DEBUG, "S3 config not available: %s", errorMsg.c_str());
+    // Check if it's 404 (intentional deletion = reset) vs error (temporary problem)
+    if (errorMsg == "File not found (404)") {
+      logPrint(LOG_INFO, "camera.json not found in S3 - clearing NVM cache and using defaults");
+      // Clear NVM cache
+      Preferences prefs;
+      prefs.begin("cam-config", false);
+      prefs.clear();
+      prefs.end();
+      // Skip NVM, go straight to defaults (configLoaded stays false)
+    } else {
+      logPrintf(LOG_DEBUG, "S3 config not available: %s", errorMsg.c_str());
+      // Temporary error - try NVM in Step 2
+    }
   }
 
-  // Step 2: If S3 failed, try NVM
+  // Step 2: If S3 failed (but not 404), try NVM
   if (!configLoaded) {
     if (loadConfigFromNVM(config, etag, errorMsg)) {
       logPrintf(LOG_INFO, "Loaded camera config from NVM (ETag: %s)", etag.c_str());
@@ -956,7 +968,33 @@ void checkCameraConfigUpdate() {
       logPrint(LOG_DEBUG, "Camera config unchanged");
     }
   } else {
-    logPrintf(LOG_DEBUG, "Camera config check failed: %s", errorMsg.c_str());
+    // Check if it's 404 (intentional deletion = reset) vs error (temporary problem)
+    if (errorMsg == "File not found (404)") {
+      logPrint(LOG_INFO, "camera.json deleted from S3 - clearing NVM cache and resetting to defaults");
+
+      // Clear NVM cache
+      Preferences prefs;
+      prefs.begin("cam-config", false);
+      prefs.clear();
+      prefs.end();
+
+      // Read current sensor defaults (don't modify sensor)
+      CameraConfig defaultConfig = readCurrentCameraConfig();
+      currentCameraConfig = defaultConfig;
+
+      // Update state
+      cameraConfigSource = "default";
+      cameraConfigETag = "";
+
+      // Upload actual sensor state
+      String useJSON = configToJSON(defaultConfig);
+      uploadJSONToS3(useJSON, "camera.use.json");
+
+      logPrint(LOG_INFO, "Camera reset to defaults complete");
+    } else {
+      logPrintf(LOG_DEBUG, "Camera config check failed: %s", errorMsg.c_str());
+      // Temporary error - keep current config
+    }
   }
 }
 
