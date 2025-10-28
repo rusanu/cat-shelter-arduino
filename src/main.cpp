@@ -1093,6 +1093,26 @@ bool initCamera() {
     Serial.println("Camera initialized successfully (warning: could not apply vflip)");
   }
 
+  // Prime frame buffers to clear garbage/uninitialized data
+  // With fb_count=2 (PSRAM mode), both buffers need to be cleared once at boot
+  if (psramFound()) {
+    Serial.println("Priming 2-frame buffers (clearing garbage data)...");
+
+    // Discard first garbage frame
+    camera_fb_t* fb1 = esp_camera_fb_get();
+    if (fb1) {
+      esp_camera_fb_return(fb1);
+    }
+
+    // Discard second garbage frame
+    camera_fb_t* fb2 = esp_camera_fb_get();
+    if (fb2) {
+      esp_camera_fb_return(fb2);
+    }
+
+    Serial.println("Frame buffers primed");
+  }
+
   return true;
 }
 
@@ -1112,19 +1132,8 @@ camera_fb_t* capturePhoto() {
   // Delay for camera sensors to adjust to lighting
   delay(200);
 
-  // When using 2 frame buffers (PSRAM mode), the first frame can be stale
-  // Discard first frame and get a fresh one
-  if (psramFound()) {
-    camera_fb_t* fbDiscard = esp_camera_fb_get();
-    if (fbDiscard) {
-      esp_camera_fb_return(fbDiscard);
-      logPrint(LOG_DEBUG, "Discarded buffered frame (2-buffer mode)");
-    }
-    // Small delay to ensure new frame is captured
-    delay(50);
-  }
-
-  // Capture photo (fresh frame in 2-buffer mode)
+  // Capture photo
+  // Note: Frame buffers are primed once at boot in initCamera()
   camera_fb_t* fb = esp_camera_fb_get();
 
   // Turn off flash immediately after capture
@@ -2051,6 +2060,36 @@ String generateStatusJSON() {
   if (cameraConfigETag.length() > 0) {
     json += "  \"camera_config_etag\": \"" + cameraConfigETag + "\",\n";
   }
+
+  // Add current camera sensor values (hardware truth at time of photo)
+  if (cameraAvailable) {
+    CameraConfig actualConfig = readCurrentCameraConfig();
+    json += "  \"camera_config\": {\n";
+    json += "    \"brightness\": " + String(actualConfig.brightness) + ",\n";
+    json += "    \"contrast\": " + String(actualConfig.contrast) + ",\n";
+    json += "    \"saturation\": " + String(actualConfig.saturation) + ",\n";
+    json += "    \"special_effect\": " + String(actualConfig.special_effect) + ",\n";
+    json += "    \"whitebal\": " + String(actualConfig.whitebal ? "true" : "false") + ",\n";
+    json += "    \"awb_gain\": " + String(actualConfig.awb_gain ? "true" : "false") + ",\n";
+    json += "    \"wb_mode\": " + String(actualConfig.wb_mode) + ",\n";
+    json += "    \"exposure_ctrl\": " + String(actualConfig.exposure_ctrl ? "true" : "false") + ",\n";
+    json += "    \"aec2\": " + String(actualConfig.aec2 ? "true" : "false") + ",\n";
+    json += "    \"ae_level\": " + String(actualConfig.ae_level) + ",\n";
+    json += "    \"aec_value\": " + String(actualConfig.aec_value) + ",\n";
+    json += "    \"gain_ctrl\": " + String(actualConfig.gain_ctrl ? "true" : "false") + ",\n";
+    json += "    \"agc_gain\": " + String(actualConfig.agc_gain) + ",\n";
+    json += "    \"gainceiling\": " + String(actualConfig.gainceiling) + ",\n";
+    json += "    \"bpc\": " + String(actualConfig.bpc ? "true" : "false") + ",\n";
+    json += "    \"wpc\": " + String(actualConfig.wpc ? "true" : "false") + ",\n";
+    json += "    \"raw_gma\": " + String(actualConfig.raw_gma ? "true" : "false") + ",\n";
+    json += "    \"lenc\": " + String(actualConfig.lenc ? "true" : "false") + ",\n";
+    json += "    \"hmirror\": " + String(actualConfig.hmirror ? "true" : "false") + ",\n";
+    json += "    \"vflip\": " + String(actualConfig.vflip ? "true" : "false") + ",\n";
+    json += "    \"dcw\": " + String(actualConfig.dcw ? "true" : "false") + ",\n";
+    json += "    \"colorbar\": " + String(actualConfig.colorbar ? "true" : "false") + "\n";
+    json += "  },\n";
+  }
+
   json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false") + ",\n";
   json += "  \"wifi_manual_override\": " + String(wifiManualOverride ? "true" : "false") + ",\n";
 
