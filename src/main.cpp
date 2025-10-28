@@ -62,7 +62,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define PHOTO_HOURLY_INTERVAL 600000   // 10 minutes in milliseconds (continuous power available)
 #define PHOTO_MOTION_COOLDOWN 60000    // 1 minute in milliseconds (continuous power available)
 #define STATUS_REPORT_INTERVAL 60000   // Status report every 60 seconds
-#define WIFI_IDLE_TIMEOUT 360000       // 6 minutes idle before WiFi disconnect (> motion cooldown)
+#define WIFI_IDLE_TIMEOUT 360000       // UNUSED - WiFi always on with continuous power
 #define BLANKET_MIN_STATE_TIME 300000  // 5 minutes minimum time before blanket can change state
 #define CAT_PRESENCE_TIMEOUT 3600000   // 60 minutes - PIR motion extends presence (PIR is motion, not presence)
 
@@ -815,7 +815,7 @@ void setup() {
   // Initialize photo timing to allow first motion-triggered photo immediately
   // Set lastPhotoTime far enough in the past to exceed cooldown period
   lastPhotoTime = millis() - PHOTO_MOTION_COOLDOWN - 1000;
-  lastHourlyPhotoTime = millis();  // Start counting from boot for hourly photos
+  lastHourlyPhotoTime = millis();  // Start counting from boot for scheduled photos
 
   // Initialize camera (allow failure in safe mode)
   if (safeMode) {
@@ -848,8 +848,8 @@ void setup() {
       takeAndUploadPhoto("boot");
     }
 
-    // WiFi will disconnect automatically after idle timeout (don't force immediate disconnect)
-    logPrint(LOG_INFO, "WiFi will disconnect after idle timeout");
+    // WiFi will remain connected - continuous power available
+    logPrint(LOG_INFO, "WiFi will remain connected (continuous power mode)");
   } else {
     logPrint(LOG_WARNING, "WiFi failed - cannot sync time");
   }
@@ -1065,7 +1065,7 @@ void takeAndUploadPhoto(const char* reason) {
       logPrint(LOG_WARNING, "Photo upload failed!");
     }
 
-    // WiFi will disconnect after idle timeout (not immediately)
+    // WiFi remains connected (continuous power mode)
   }
 }
 
@@ -1077,11 +1077,11 @@ void checkPhotoSchedule() {
 
   unsigned long currentMillis = millis();
 
-  // Check for hourly photo
+  // Check for scheduled photo (regular interval)
   if (currentMillis - lastHourlyPhotoTime >= PHOTO_HOURLY_INTERVAL) {
     lastHourlyPhotoTime = currentMillis;
     lastPhotoTime = currentMillis;
-    takeAndUploadPhoto("hourly");
+    takeAndUploadPhoto("scheduled");
     return;
   }
 
@@ -1306,10 +1306,10 @@ String generateStatusJSON() {
   json += "  \"psram_size_bytes\": " + String(ESP.getPsramSize());
 
   if (cameraAvailable) {
-    unsigned long nextHourlyPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
+    unsigned long nextScheduledPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
     unsigned long timeSinceLastPhoto = currentMillis - lastPhotoTime;
     json += ",\n";
-    json += "  \"next_hourly_photo_minutes\": " + String(nextHourlyPhoto / 60000) + ",\n";
+    json += "  \"next_scheduled_photo_minutes\": " + String(nextScheduledPhoto / 60000) + ",\n";
     json += "  \"time_since_last_photo_minutes\": " + String(timeSinceLastPhoto / 60000);
   }
 
@@ -1371,8 +1371,8 @@ void printStatusReport(bool forceImmediate) {
     Serial.println("---------------------");
 
     if (cameraAvailable) {
-      unsigned long nextHourlyPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
-      Serial.printf("Next hourly photo in: %lu minutes\n", nextHourlyPhoto / 60000);
+      unsigned long nextScheduledPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
+      Serial.printf("Next scheduled photo in: %lu minutes\n", nextScheduledPhoto / 60000);
 
       unsigned long timeSinceLastPhoto = currentMillis - lastPhotoTime;
       Serial.printf("Time since last photo: %lu minutes\n", timeSinceLastPhoto / 60000);
@@ -1415,11 +1415,7 @@ void loop() {
     }
   }
 
-  // Check WiFi idle timeout and disconnect if inactive (skip if in manual override mode)
-  if (!wifiManualOverride && wifiConnected && (currentMillis - lastWiFiActivity) >= WIFI_IDLE_TIMEOUT) {
-    logPrint(LOG_INFO, "WiFi idle timeout - disconnecting to save power");
-    disconnectWiFi();
-  }
+  // WiFi idle timeout disabled - continuous power available, keep WiFi always connected
 
   // Handle serial commands
   handleSerialCommands();
