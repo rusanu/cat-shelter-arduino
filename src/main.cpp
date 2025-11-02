@@ -23,7 +23,12 @@
 #include <ArduinoJson.h>
 #include "esp_camera.h"
 #include "esp_wifi.h"
+#include "image_analyzer.h"
 #include "secrets.h"  // WiFi credentials (not in git)
+
+extern "C" {
+uint8_t temprature_sens_read();
+}
 
 // Default S3 folder if not defined in secrets.h (backward compatibility)
 #ifndef S3_FOLDER
@@ -68,7 +73,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define CAT_PRESENCE_TIMEOUT 3600000   // 60 minutes - PIR motion extends presence (PIR is motion, not presence)
 
 // Temperature threshold for blanket control (in Celsius)
-#define TEMP_COLD_THRESHOLD 10.0  // Turn on blanket if temp is below this and cat present
+#define TEMP_COLD_THRESHOLD 13.0  // Turn on blanket if temp is below this and cat present
 #define TEMP_MAX_REASONABLE 45.0  // Maximum reasonable outdoor temperature (detect sensor errors)
 #define TEMP_MIN_REASONABLE -30.0 // Minimum reasonable outdoor temperature (detect sensor errors)
 
@@ -148,6 +153,17 @@ struct CameraConfig {
   bool dcw;               // Downsize enable
   bool colorbar;          // Color bar test pattern enable
 };
+
+float getChipTemperature()
+{
+  // Read raw temperature sensor value
+  uint8_t temp_raw = temprature_sens_read();
+  
+  // Convert to Celsius (approximation formula for ESP32)
+  float temp_celsius = (temp_raw - 32) / 1.8;
+
+  return temp_celsius;
+}
 
 // Read current camera configuration from sensor (hardware truth)
 CameraConfig readCurrentCameraConfig() {
@@ -560,7 +576,7 @@ void logPrintf(LogLevel level, const char* format, ...) {
 // Forward declarations
 bool connectWiFi();
 void printStatusReport(bool forceImmediate = false);
-String generateStatusJSON();
+String generateStatusJSON(const ImageQualityMetrics&);
 float getExpectedTemperature();
 float getEffectiveTemperature();
 void takeAndUploadPhoto(const char* reason);
@@ -1088,6 +1104,7 @@ bool initCamera() {
   sensor_t* s = esp_camera_sensor_get();
   if (s) {
     s->set_vflip(s, 1);  // Flip vertically for upside-down mounting
+    s->set_hmirror(s, 1); // Flip horizontally for on-site mounting position
     Serial.println("Camera initialized successfully (vflip applied for mounting)");
   } else {
     Serial.println("Camera initialized successfully (warning: could not apply vflip)");
@@ -1125,6 +1142,17 @@ void flashOff() {
 }
 
 camera_fb_t* capturePhoto() {
+   camera_fb_t* fb = nullptr;
+   
+  // force out the stale internal capture(s)
+  for(int i=0;i<5;++i) {
+    fb = esp_camera_fb_get();
+    if (fb) {
+      esp_camera_fb_return(fb);
+      fb = nullptr;
+    }
+  }
+  
   // Turn on flash
   flashOn();
   logPrint(LOG_DEBUG, "Flash ON");
@@ -1134,7 +1162,7 @@ camera_fb_t* capturePhoto() {
 
   // Capture photo
   // Note: Frame buffers are primed once at boot in initCamera()
-  camera_fb_t* fb = esp_camera_fb_get();
+  fb = esp_camera_fb_get();
 
   // Turn off flash immediately after capture
   flashOff();
@@ -1441,7 +1469,7 @@ bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
   }
 }
 
-bool uploadStatusToS3(const String& filename) {
+bool uploadStatusToS3(const String& filename, const ImageQualityMetrics& stats) {
   // Ensure WiFi is connected
   if (!connectWiFi()) {
     return false;
@@ -1460,7 +1488,7 @@ bool uploadStatusToS3(const String& filename) {
   }
 
   // Generate status JSON
-  String statusJSON = generateStatusJSON();
+  String statusJSON = generateStatusJSON(stats);
   uint8_t* payload = (uint8_t*)statusJSON.c_str();
   size_t payload_len = statusJSON.length();
 
@@ -1808,6 +1836,9 @@ void takeAndUploadPhoto(const char* reason) {
 
   camera_fb_t* fb = capturePhoto();
   if (fb) {
+    ImageAnalyzer analizer;
+    auto stats = analizer.analyze(fb);
+
     bool photoSuccess = uploadPhotoToS3(fb, photoFilename);
     releasePhoto(fb);
 
@@ -1816,7 +1847,7 @@ void takeAndUploadPhoto(const char* reason) {
       lastWiFiActivity = millis();  // Update activity timestamp
 
       // Upload status JSON with same base filename
-      bool jsonSuccess = uploadStatusToS3(jsonFilename);
+      bool jsonSuccess = uploadStatusToS3(jsonFilename, stats);
       if (jsonSuccess) {
         logPrint(LOG_INFO, "Status JSON uploaded successfully!");
       } else {
@@ -2015,7 +2046,7 @@ void handleSerialCommands() {
   }
 }
 
-String generateStatusJSON() {
+String generateStatusJSON(const ImageQualityMetrics& stats) {
   unsigned long currentMillis = millis();
   time_t now = time(nullptr);
   struct tm timeinfo;
@@ -2061,6 +2092,18 @@ String generateStatusJSON() {
     json += "  \"camera_config_etag\": \"" + cameraConfigETag + "\",\n";
   }
 
+  json+= "  \"image_quality_metrics\": {\n"
+      "    \"brightness\": " + String(stats.brightness) +",\n"
+      "    \"contrast\": " + String(stats.contrast) +",\n"
+      "    \"isBright\": " + String(stats.isBright) +",\n"
+      "    \"isDark\": " + String(stats.isDark) +",\n"
+      "    \"noiseLevel\": " + String(stats.noiseLevel) +",\n"
+      "    \"overexposure\": " + String(stats.overexposure) +",\n"
+      "    \"qualityScore\": " + String(stats.qualityScore) +",\n"
+      "    \"sharpness\": " + String(stats.sharpness) +",\n"
+      "    \"underexposure\": " + String(stats.underexposure) +"\n"
+    "  },\n";
+
   // Add current camera sensor values (hardware truth at time of photo)
   if (cameraAvailable) {
     CameraConfig actualConfig = readCurrentCameraConfig();
@@ -2098,7 +2141,8 @@ String generateStatusJSON() {
   json += "  \"heap_size_bytes\": " + String(ESP.getHeapSize()) + ",\n";
   json += "  \"heap_min_free_bytes\": " + String(ESP.getMinFreeHeap()) + ",\n";
   json += "  \"psram_free_bytes\": " + String(ESP.getFreePsram()) + ",\n";
-  json += "  \"psram_size_bytes\": " + String(ESP.getPsramSize());
+  json += "  \"psram_size_bytes\": " + String(ESP.getPsramSize()) +",\n";
+  json += "  \"chip_temperature\": " + String(getChipTemperature());
 
   if (cameraAvailable) {
     unsigned long nextScheduledPhoto = PHOTO_HOURLY_INTERVAL - (currentMillis - lastHourlyPhotoTime);
@@ -2118,8 +2162,6 @@ void printStatusReport(bool forceImmediate) {
   // Check timing unless forced (e.g., from manual command)
   if (forceImmediate || (currentMillis - lastStatusReport >= STATUS_REPORT_INTERVAL)) {
     lastStatusReport = currentMillis;
-
-    String statusJSON = generateStatusJSON();
 
     Serial.println("\n===== STATUS REPORT =====");
     Serial.printf("Mode: %s\n", safeMode ? "SAFE MODE" : "NORMAL");
@@ -2170,6 +2212,7 @@ void printStatusReport(bool forceImmediate) {
     Serial.printf("Heap Min Free: %u bytes (%.1f KB)\n", ESP.getMinFreeHeap(), ESP.getMinFreeHeap() / 1024.0);
     Serial.printf("PSRAM Free: %u bytes (%.1f KB)\n", ESP.getFreePsram(), ESP.getFreePsram() / 1024.0);
     Serial.printf("PSRAM Size: %u bytes (%.1f KB)\n", ESP.getPsramSize(), ESP.getPsramSize() / 1024.0);
+    Serial.printf("Chip Temperature: %.2f celsius\n", getChipTemperature());
     Serial.println("---------------------");
 
     if (cameraAvailable) {
