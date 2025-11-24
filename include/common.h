@@ -45,6 +45,9 @@ enum LogLevel {
 // Logging macro - logPrint implemented as macro using logPrintf
 #define logPrint(level, msg) logPrintf(level, "%s", msg)
 
+extern bool wifiConnected;
+extern bool hasSNTPTime;
+
 // Camera configuration structure
 struct CameraConfig {
   int8_t brightness;      // -2 to 2
@@ -144,6 +147,7 @@ camera_fb_t* capturePhoto();
 void releasePhoto(camera_fb_t* fb);
 
 // WiFi functions
+void setupWifi(const char* hostname);
 bool connectWiFi();
 void disconnectWiFi();
 bool syncTimeWithNTP(int maxRetries = 3);
