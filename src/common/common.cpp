@@ -26,9 +26,7 @@
 #include "image_analyzer.h"
 #include "secrets.h"  // WiFi credentials (not in git)
 
-extern "C" {
-uint8_t temprature_sens_read();
-}
+#include "common.h"
 
 // Default S3 folder if not defined in secrets.h (backward compatibility)
 #ifndef S3_FOLDER
@@ -63,19 +61,6 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-// Timing constants
-#define DHT_READ_INTERVAL 2000  // Read DHT22 every 2 seconds
-#define PHOTO_HOURLY_INTERVAL 600000   // 10 minutes in milliseconds (continuous power available)
-#define PHOTO_MOTION_COOLDOWN 60000    // 1 minute in milliseconds (continuous power available)
-#define STATUS_REPORT_INTERVAL 60000   // Status report every 60 seconds
-#define WIFI_IDLE_TIMEOUT 360000       // UNUSED - WiFi always on with continuous power
-#define BLANKET_MIN_STATE_TIME 300000  // 5 minutes minimum time before blanket can change state
-#define CAT_PRESENCE_TIMEOUT 3600000   // 60 minutes - PIR motion extends presence (PIR is motion, not presence)
-
-// Temperature threshold for blanket control (in Celsius)
-#define TEMP_COLD_THRESHOLD 13.0  // Turn on blanket if temp is below this and cat present
-#define TEMP_MAX_REASONABLE 45.0  // Maximum reasonable outdoor temperature (detect sensor errors)
-#define TEMP_MIN_REASONABLE -30.0 // Minimum reasonable outdoor temperature (detect sensor errors)
 
 // Typical winter temperatures for Pitesti, Romania (December-February) by hour (in Celsius)
 // Based on average winter nighttime lows (-5 to 5°C) and daytime highs (0 to 10°C)
@@ -106,53 +91,9 @@ const float WINTER_TEMP_TABLE[24] = {
   -2.0   // 23:00
 };
 
-// Boot and recovery settings
-#define MAX_BOOT_ATTEMPTS 3       // Max failed boots before entering safe mode
-#define BOOT_SUCCESS_TIMEOUT 300000  // 5 minutes - if running this long, boot is successful
-#define SAFE_MODE_RECOVERY_INTERVAL 3600000  // 1 hour - attempt to exit safe mode and retry
-
-// Logging levels
-enum LogLevel {
-  LOG_ERROR = 0,
-  LOG_WARNING = 1,
-  LOG_INFO = 2,
-  LOG_DEBUG = 3
-};
 
 // Current log level (can be changed via serial commands)
 LogLevel currentLogLevel = LOG_INFO;
-
-// Forward declaration for logging (needed before macro)
-void logPrintf(LogLevel level, const char* format, ...);
-
-// Logging macro - logPrint implemented as macro using logPrintf
-#define logPrint(level, msg) logPrintf(level, "%s", msg)
-
-// Camera configuration structure
-struct CameraConfig {
-  int8_t brightness;      // -2 to 2
-  int8_t contrast;        // -2 to 2
-  int8_t saturation;      // -2 to 2
-  uint8_t special_effect; // 0-6 (0=None, 1=Negative, 2=Grayscale, 3=Red, 4=Green, 5=Blue, 6=Sepia)
-  bool whitebal;          // White balance enable
-  bool awb_gain;          // Auto white balance gain enable
-  uint8_t wb_mode;        // 0-4 (0=Auto, 1=Sunny, 2=Cloudy, 3=Office, 4=Home)
-  bool exposure_ctrl;     // Auto exposure control enable
-  bool aec2;              // AEC2 enable
-  int8_t ae_level;        // -2 to 2
-  uint16_t aec_value;     // 0 to 1200
-  bool gain_ctrl;         // Auto gain control enable
-  uint8_t agc_gain;       // 0 to 30
-  uint8_t gainceiling;    // 0 to 6
-  bool bpc;               // Black pixel correction enable
-  bool wpc;               // White pixel correction enable
-  bool raw_gma;           // Raw gamma enable
-  bool lenc;              // Lens correction enable
-  bool hmirror;           // Horizontal mirror
-  bool vflip;             // Vertical flip
-  bool dcw;               // Downsize enable
-  bool colorbar;          // Color bar test pattern enable
-};
 
 float getChipTemperature()
 {
@@ -550,7 +491,6 @@ CameraConfig currentCameraConfig;
 String cameraConfigSource = "default";  // "default", "nvm", or "s3"
 String cameraConfigETag = "";  // ETag of the config currently in use
 unsigned long lastCameraConfigCheck = 0;  // Track last time we checked S3 for config updates
-#define CAMERA_CONFIG_CHECK_INTERVAL 3600000  // 60 minutes in milliseconds
 
 // Logging functions
 void logPrintf(LogLevel level, const char* format, ...) {
@@ -572,14 +512,6 @@ void logPrintf(LogLevel level, const char* format, ...) {
     Serial.println(buffer);
   }
 }
-
-// Forward declarations
-bool connectWiFi();
-void printStatusReport(bool forceImmediate = false);
-String generateStatusJSON(const ImageQualityMetrics&);
-float getExpectedTemperature();
-float getEffectiveTemperature();
-void takeAndUploadPhoto(const char* reason);
 
 // ===== AWS Signature V4 Functions =====
 // Adapted from: https://github.com/Mair/esp-aws-s3-auth-header
@@ -1313,7 +1245,7 @@ void disconnectWiFi() {
   wifiConnected = false;
 }
 
-bool syncTimeWithNTP(int maxRetries = 3) {
+bool syncTimeWithNTP(int maxRetries) {
   logPrint(LOG_INFO, "Synchronizing time with NTP...");
   configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
@@ -1575,91 +1507,6 @@ void setupGPIO() {
   Serial.println("- PIR_PIN (GPIO13): INPUT");
   Serial.println("- DHT_PIN (GPIO14): DHT22 sensor");
   Serial.println("- FLASH_LED_PIN (GPIO4): OUTPUT");
-}
-
-void setup() {
-  // Initialize serial communication for debugging
-  Serial.begin(115200);
-  delay(1000);
-
-  Serial.println("\n=== Cat Shelter Controller Starting ===");
-
-  // Load boot state from NVM
-  loadBootState();
-
-  // Increment boot attempt counter
-  incrementBootAttempt();
-
-  bootStartTime = millis();
-
-  // Initialize photo timing to allow first motion-triggered photo immediately
-  // Set lastPhotoTime far enough in the past to exceed cooldown period
-  lastPhotoTime = millis() - PHOTO_MOTION_COOLDOWN - 1000;
-  lastHourlyPhotoTime = millis();  // Start counting from boot for scheduled photos
-
-  // Initialize camera config check timer (starts counting from boot)
-  lastCameraConfigCheck = millis();
-
-  // Initialize camera (allow failure in safe mode)
-  if (safeMode) {
-    Serial.println("*** RUNNING IN SAFE MODE - Camera disabled ***");
-    cameraAvailable = false;
-  } else {
-    cameraAvailable = initCamera();
-    if (!cameraAvailable) {
-      Serial.println("WARNING: Camera initialization failed!");
-      Serial.println("System will reboot to retry...");
-      delay(2000);
-      rebootSystem("Camera init failed");
-    }
-  }
-
-  // Setup GPIO pins
-  setupGPIO();
-
-  // Initialize DHT22 sensor
-  dht.begin();
-  Serial.println("DHT22 sensor initialized");
-
-  // Connect WiFi temporarily to sync time
-  if (connectWiFi()) {
-    syncTimeWithNTP(3);  // Try up to 3 times
-
-    // Load camera configuration (S3 → NVM → defaults)
-    loadCameraConfigAtBoot();
-
-    // Take boot snapshot if camera is available and time is synced
-    if (cameraAvailable && time(nullptr) > 100000) {
-      logPrint(LOG_INFO, "Taking boot snapshot...");
-      takeAndUploadPhoto("boot");
-    }
-
-    // WiFi will remain connected - continuous power available
-    logPrint(LOG_INFO, "WiFi will remain connected (continuous power mode)");
-  } else {
-    logPrint(LOG_WARNING, "WiFi failed - cannot sync time");
-
-    // No WiFi - load camera config from NVM or defaults
-    loadCameraConfigAtBoot();
-  }
-
-  if (safeMode) {
-    logPrint(LOG_WARNING, "");
-    logPrint(LOG_WARNING, "!!! SAFE MODE ACTIVE !!!");
-    logPrint(LOG_WARNING, "Reason: Too many failed boot attempts");
-    logPrint(LOG_WARNING, "Core functions only:");
-    logPrint(LOG_WARNING, "- Temperature monitoring: ENABLED");
-    logPrint(LOG_WARNING, "- Blanket control: ENABLED");
-    logPrint(LOG_WARNING, "- Camera/Photos: DISABLED");
-    logPrint(LOG_WARNING, "");
-    logPrint(LOG_INFO, "To exit safe mode:");
-    logPrint(LOG_INFO, "1. Type 'reset' command to clear boot counter");
-    logPrint(LOG_INFO, "2. Power cycle the device");
-    logPrint(LOG_INFO, "3. If camera still fails, check power supply and connections");
-    logPrint(LOG_WARNING, "");
-  }
-
-  Serial.println("=== Setup Complete ===\n");
 }
 
 void checkPIRSensor() {
@@ -2225,66 +2072,4 @@ void printStatusReport(bool forceImmediate) {
 
     Serial.println("========================\n");
   }
-}
-
-void loop() {
-  unsigned long currentMillis = millis();
-
-  // Check if we've been running successfully for long enough
-  if (bootAttempts > 0 && (currentMillis - bootStartTime) >= BOOT_SUCCESS_TIMEOUT) {
-    markBootSuccess();
-  }
-
-  // Safe mode automatic recovery - attempt to exit safe mode every hour
-  // Important for unattended operation over months
-  if (safeMode) {
-    // Initialize recovery timer on first safe mode entry
-    if (lastSafeModeRecoveryAttempt == 0) {
-      lastSafeModeRecoveryAttempt = currentMillis;
-    }
-
-    // Check if it's time to attempt recovery
-    if ((currentMillis - lastSafeModeRecoveryAttempt) >= SAFE_MODE_RECOVERY_INTERVAL) {
-      logPrint(LOG_WARNING, "Safe mode recovery attempt - resetting boot counter and rebooting");
-      logPrint(LOG_INFO, "System has been stable for 1 hour in safe mode");
-      logPrint(LOG_INFO, "Attempting to return to normal operation...");
-
-      // Reset boot counter and safe mode flag
-      markBootSuccess();
-
-      // Wait a moment for logs to flush
-      delay(1000);
-
-      // Reboot to try normal mode again
-      rebootSystem("Safe mode recovery attempt");
-    }
-  }
-
-  // WiFi idle timeout disabled - continuous power available, keep WiFi always connected
-
-  // Handle serial commands
-  handleSerialCommands();
-
-  // Check for cat presence
-  checkPIRSensor();
-
-  // Read temperature and humidity sensor
-  readDHT22();
-
-  // Update blanket control based on conditions
-  updateBlanketControl();
-
-  // Check if it's time to take and upload a photo
-  checkPhotoSchedule();
-
-  // Check for camera config updates from S3 (every 60 minutes)
-  if ((currentMillis - lastCameraConfigCheck) >= CAMERA_CONFIG_CHECK_INTERVAL) {
-    lastCameraConfigCheck = currentMillis;
-    checkCameraConfigUpdate();
-  }
-
-  // Print periodic status report
-  printStatusReport();
-
-  delay(100);
 }
