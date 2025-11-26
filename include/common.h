@@ -9,7 +9,7 @@
 
 // Forward declarations and external declarations
 extern "C" {
-uint8_t temprature_sens_read();
+  uint8_t temprature_sens_read();
 }
 
 // Timing constants
@@ -20,6 +20,7 @@ uint8_t temprature_sens_read();
 #define WIFI_IDLE_TIMEOUT 360000       // UNUSED - WiFi always on with continuous power
 #define BLANKET_MIN_STATE_TIME 300000  // 5 minutes minimum time before blanket can change state
 #define CAT_PRESENCE_TIMEOUT 3600000   // 60 minutes - PIR motion extends presence (PIR is motion, not presence)
+#define WIFI_RETRY_CONNECT 30000 // 30s between WiFi connect attempts
 
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 13.0  // Turn on blanket if temp is below this and cat present
@@ -34,6 +35,104 @@ uint8_t temprature_sens_read();
 // Camera configuration check interval
 #define CAMERA_CONFIG_CHECK_INTERVAL 3600000  // 60 minutes in milliseconds
 
+/// @brief A class for debouncing timer with min and max guard (for motion detected trigger)
+class DebounceTimer {
+  private:
+    unsigned long _lastAct = 0;
+    unsigned long _currentDelay = 0;
+    unsigned long _minAct = 10*1000; // 10s time between actions when motion is detected
+    unsigned long _maxDelay = 5*60*1000; // 5m max time between actions for contigous motion
+    unsigned long _cooldown = 10*60*1000; // 10m contigous motion cooldown when no motion
+    unsigned long _maxAct = 30*60*1000; // 30m max time between actions when no motion
+  public:
+
+    inline unsigned long LastAct() {
+      return _lastAct;
+    }
+
+    inline unsigned long CurrentDelay() {
+      return _currentDelay;
+    }
+
+    inline bool CanAct() {
+      unsigned long now = millis();
+      if (_lastAct + _currentDelay > now) {
+        return false;
+      };
+      // Reset delay if cooldown has passed
+      if (_lastAct + _cooldown < now) {
+        _currentDelay = _minAct;
+      }
+      else {
+        _currentDelay = max(_minAct, min(_currentDelay * 2, _maxDelay));
+      }
+      _lastAct = now;
+      return true;
+    }
+
+    inline bool MustAct() {
+      unsigned long now = millis();
+      if (_lastAct + _maxAct < now) {
+        return false;
+      }      
+      _lastAct = now;
+      return true;
+    }
+};
+
+/// @brief A class for retry with back-off
+class BackOffRetry {
+  private:
+    unsigned long _lastRetry = 0;
+    unsigned long _currentDelay = 0;
+    unsigned long _minDelay = 1000;
+    unsigned long _maxDelay = 30000;
+
+    unsigned long _allowedCount = 0;
+    unsigned long _delayedCount = 0;
+    unsigned long _resetCount = 0;
+  public:
+    inline BackOffRetry(unsigned long maxDelay) {
+      _maxDelay = maxDelay;
+    }
+
+    inline BackOffRetry(unsigned long maxDelay, unsigned long minDelay) {
+      _maxDelay = maxDelay;
+      _minDelay = minDelay;
+    }
+
+    inline unsigned long AllowedCount() {
+      return _allowedCount;
+    }
+
+    inline unsigned long DelayedCount() {
+      return _delayedCount;
+    }
+
+    inline unsigned long ResetCount() {
+      return _resetCount;
+    }
+
+    inline void Reset() {
+      _currentDelay = 0;
+      _lastRetry = 0;
+      _allowedCount = _delayedCount = 0;
+      ++_resetCount;
+    }
+
+    inline bool CanRetry() {
+      unsigned long now = millis();
+      if (_lastRetry + _currentDelay > now) {
+        ++_delayedCount;
+        return false;
+      }
+      _lastRetry = now;
+      _currentDelay = min(_maxDelay, max(_currentDelay * 2, _minDelay));
+      ++_allowedCount;
+      return true;
+    }
+};
+
 // Logging levels
 enum LogLevel {
   LOG_ERROR = 0,
@@ -45,8 +144,8 @@ enum LogLevel {
 // Logging macro - logPrint implemented as macro using logPrintf
 #define logPrint(level, msg) logPrintf(level, "%s", msg)
 
-extern bool wifiConnected;
-extern bool hasSNTPTime;
+extern volatile bool wifiConnected;
+extern volatile bool hasSNTPTime;
 
 // Camera configuration structure
 struct CameraConfig {
@@ -85,7 +184,6 @@ extern unsigned long lastMotionDetected;
 extern float currentTemp;
 extern float currentHumidity;
 extern bool dhtSensorWorking;
-extern bool wifiConnected;
 extern bool wifiManualOverride;
 extern unsigned long lastWiFiActivity;
 extern unsigned long lastPhotoTime;

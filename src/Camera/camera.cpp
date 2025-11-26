@@ -18,30 +18,35 @@
 #error "This file should only be included in the CAMERA environment"
 #endif
 
+static DebounceTimer cameraAction;
+
 void setup() {
 
   // Initialize serial communication for debugging
   Serial.begin(115200);
 
-  Serial.println("\n=== Cat Camera Controller Starting ===");
+  logPrintf(LOG_INFO, "=== Cat Camera Controller Starting ===");
 
   setupWifi("CAMERA");
 
   cameraAvailable = initCamera();
   if (!cameraAvailable) {
-        Serial.println("WARNING: Camera initialization failed!");
-        Serial.println("System will reboot to retry...");
+        logPrintf(LOG_WARNING, "Camera initialization failed!");
+        logPrintf(LOG_WARNING, "System will reboot to retry...");
         delay(2000);
         rebootSystem("Camera init failed");
   }
 
-  Serial.println("=== Setup Complete ===\n");
+  logPrintf(LOG_INFO, "=== Setup Complete ===");
 }
 
-void loop() {
-  unsigned long currentMillis = millis();
 
- if (!wifiConnected) {
-    connectWiFi();
- }
+void loop() {
+    if (!wifiConnected) {
+        connectWiFi();
+    }
+
+    if (cameraAction.CanAct()) {
+          logPrintf(LOG_INFO, "Camera action: %ld %ld", cameraAction.LastAct(), cameraAction.CurrentDelay());
+    }
 }

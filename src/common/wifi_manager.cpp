@@ -22,15 +22,18 @@ typedef enum {
 
 static bool wifiSetupInitialized = false;
 
+static BackOffRetry connectRetry(WIFI_RETRY_CONNECT);
+
 static EWiFiState _wifiState = EWiFiState::Disconnected;
 
-bool wifiConnected = false;
+volatile bool wifiConnected = false;
 bool wifiManualOverride = false;  // Track if WiFi is in manual control mode
 unsigned long lastWiFiActivity = 0;  // Track last WiFi usage for idle timeout
 unsigned long lastDisconnectTime = 0;
 unsigned long lastConnectTime = 0;
+unsigned long lastConnectAttempt = 0;
 unsigned long lastSntpSync = 0;
-bool hasSNTPTime = false;
+volatile bool hasSNTPTime = false;
 
 void timeSyncCallback(struct timeval *tv) {
     time_t now = time(nullptr);
@@ -48,9 +51,7 @@ void timeSyncCallback(struct timeval *tv) {
 }
 
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-    Serial.println("WiFi disconnected.");
-    Serial.print("Reason: ");
-    Serial.println(info.wifi_sta_disconnected.reason);
+    logPrintf(LOG_INFO, "WiFi disconnected. Reason: %d", info.wifi_sta_disconnected.reason);
     
     _wifiState = EWiFiState::Disconnected;
     wifiConnected = false;
@@ -58,24 +59,18 @@ void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
 }
 
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-    Serial.println("WiFi connected");
-    Serial.print("AuthMode: ");
-    Serial.println(info.wifi_sta_connected.authmode);
-    Serial.print("Signal strength: ");
-    Serial.print(WiFi.RSSI());
-    Serial.println(" dBm");
+    logPrintf(LOG_INFO, "WiFi connected. AuthMode:%d Signal strength:%d dBm", info.wifi_sta_connected.authmode, WiFi.RSSI());
 }
 
 void WiFiStationGotIP(WiFiEvent_t event, WiFiEventInfo_t info) {
-    Serial.println("WiFi got IP");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    logPrintf(LOG_INFO, "WiFi got IP. Address:%s", WiFi.localIP().toString().c_str());
 
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     
     _wifiState = EWiFiState::Connected;
     wifiConnected = true;
     lastConnectTime = millis();
+    connectRetry.Reset();
 }
 
 void setupWifi(const char* hostname) {
@@ -96,8 +91,7 @@ void setupWifi(const char* hostname) {
             uint64_t chipId = ESP.getEfuseMac();
             char chiphost[32+1];
             snprintf(chiphost, 32, "ESP32CAM-%s-%04X%08X", hostname, chipId, (uint32_t)chipId);
-            Serial.print("hostname:");
-            Serial.println(chiphost);
+            logPrintf(LOG_INFO, "Hostname: %s", chiphost);
             WiFi.setHostname(chiphost);
         }
         wifiSetupInitialized = true;
@@ -106,37 +100,40 @@ void setupWifi(const char* hostname) {
 
 bool connectWiFi() {
 
-  if (wifiConnected) {
-    return true;
-  }
+    if (wifiConnected) {
+        return true;
+    }
 
-  if (_wifiState == EWiFiState::Connecting) {
-    return false;
-  }
+    if (_wifiState == EWiFiState::Connecting) {
+        return false;
+    }
 
-  _wifiState = EWiFiState::Connecting;
+    if (!connectRetry.CanRetry()) {
+        return false;
+    }
 
-  Serial.println("Starting WiFi network scan...");
+    _wifiState = EWiFiState::Connecting;
+    
+    logPrintf(LOG_INFO, "Starting WiFi connect [Retry %ld %ld %ld]...", connectRetry.AllowedCount(), connectRetry.DelayedCount(), connectRetry.ResetCount());
 
+    // Scan for available networks
+    int networksFound = WiFi.scanNetworks();
+    if (networksFound <= 0) {
+        logPrintf(LOG_WARNING, "No  networks found: %d", networksFound);
+        // no need to call scanDelete()
+        return false;
+    }
 
-  // Scan for available networks
-  int networksFound = WiFi.scanNetworks();
-  Serial.printf("Found %d networks:\n", networksFound);
-  if (networksFound <= 0) {
-      // no need to call scanDelete()
-      return false;
-  }
+    logPrintf(LOG_INFO, "Found %d networks:", networksFound);
 
     // List all networks with signal strength
-    Serial.println("\n=== Available WiFi Networks ===");
     for (int i = 0; i < networksFound; i++) {
-        Serial.printf("  %2d: %-32s  %3d dBm  %d\n",
+        logPrintf(LOG_INFO, "  %2d: %-32s  %3d dBm  AuthMode:%d",
                     i + 1,
                     WiFi.SSID(i).c_str(),
                     WiFi.RSSI(i),
                     WiFi.encryptionType(i));
     }
-    Serial.println("===============================\n");
 
     // Find the best available known network
     const char* selectedSSID = nullptr;
@@ -145,64 +142,54 @@ bool connectWiFi() {
 
     wifi_auth_mode_t selectedAuthMode = WIFI_AUTH_OPEN;
 
-    Serial.println("Checking for known networks...");
     for (int i = 0; i < KNOWN_NETWORKS_COUNT; i++) {
-        Serial.printf("  Looking for: %s... ", KNOWN_NETWORKS[i].ssid);
 
         // Check if this known network is in the scan results
         bool found = false;
         for (int j = 0; j < networksFound; j++) {
-        if (WiFi.SSID(j) == String(KNOWN_NETWORKS[i].ssid)) {
-            int rssi = WiFi.RSSI(j);
-            wifi_auth_mode_t authMode = WiFi.encryptionType(j);
-            Serial.printf("FOUND (signal: %d dBm, authMode: %d)\n", rssi, authMode);
-            found = true;
+            if (WiFi.SSID(j) == String(KNOWN_NETWORKS[i].ssid)) {
+                int rssi = WiFi.RSSI(j);
+                wifi_auth_mode_t authMode = WiFi.encryptionType(j);
+                logPrintf(LOG_INFO, "FOUND (signal: %d dBm, authMode: %d)", rssi, authMode);
+                found = true;
 
-            // Select this network if it's the first one found or has better signal
-            if (selectedSSID == nullptr || rssi > bestRSSI) {
-            selectedSSID = KNOWN_NETWORKS[i].ssid;
-            selectedPassword = KNOWN_NETWORKS[i].password;
-            selectedAuthMode = authMode;
-            bestRSSI = rssi;
+                // Select this network if it's the first one found or has better signal
+                if (selectedSSID == nullptr || rssi > bestRSSI) {
+                    selectedSSID = KNOWN_NETWORKS[i].ssid;
+                    selectedPassword = KNOWN_NETWORKS[i].password;
+                    selectedAuthMode = authMode;
+                    bestRSSI = rssi;
+                    }
+                break;
             }
-            break;
-        }
-        }
-
-        if (!found) {
-        Serial.println("not found");
         }
     }
   
-  // Clean up scan results
-  WiFi.scanDelete();
+    // Clean up scan results
+    WiFi.scanDelete();
 
-  // Check if we found any known network
-  if (selectedSSID == nullptr) {
-    Serial.println("\nERROR: No known networks available!");
-    Serial.println("Known networks:");
-    for (int i = 0; i < KNOWN_NETWORKS_COUNT; i++) {
-      Serial.printf("  - %s\n", KNOWN_NETWORKS[i].ssid);
+    // Check if we found any known network
+    if (selectedSSID == nullptr) {
+        logPrintf(LOG_ERROR, "No known networks available");
+        _wifiState = EWiFiState::Disconnected;
+        lastDisconnectTime = millis();
+        return false;
     }
-    _wifiState = EWiFiState::Disconnected;
-    lastDisconnectTime = millis();
+
+    // Connect to selected network
+    logPrintf(LOG_INFO, "Connecting to: %s (signal: %d dBm, AuthMode: %d)", selectedSSID, bestRSSI, selectedAuthMode);
+
+    wifi_config_t wifi_config = {};
+    esp_wifi_get_config(WIFI_IF_STA, &wifi_config);
+    wifi_config.sta.threshold.authmode = selectedAuthMode;
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+    esp_wifi_set_config(WIFI_IF_STA, &wifi_config);  
+
+    // Start WiFi connection
+    WiFi.begin(selectedSSID, selectedPassword);
+
     return false;
-  }
-
-  // Connect to selected network
-  Serial.printf("\nConnecting to: %s (signal: %d dBm, AuthMode: %d)\n", selectedSSID, bestRSSI, selectedAuthMode);
-
-  wifi_config_t wifi_config = {};
-  esp_wifi_get_config(WIFI_IF_STA, &wifi_config);
-  wifi_config.sta.threshold.authmode = selectedAuthMode;
-  wifi_config.sta.pmf_cfg.capable = true;
-  wifi_config.sta.pmf_cfg.required = false;
-  esp_wifi_set_config(WIFI_IF_STA, &wifi_config);  
-
-  // Start WiFi connection
-  WiFi.begin(selectedSSID, selectedPassword);
-
-  return false;
 }
 
 void disconnectWiFi() {
@@ -210,7 +197,7 @@ void disconnectWiFi() {
     return;
   }
 
-  Serial.println("Disconnecting WiFi for power saving...");
+  logPrintf(LOG_INFO, "Disconnecting WiFi");
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   wifiConnected = false;

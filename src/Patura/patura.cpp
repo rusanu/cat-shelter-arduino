@@ -70,6 +70,8 @@ void setup() {
   dht.begin();
   Serial.println("DHT22 sensor initialized");
 
+  setupWifi("PATURA");
+
   // Connect WiFi temporarily to sync time
   if (connectWiFi()) {
     syncTimeWithNTP(3);  // Try up to 3 times
