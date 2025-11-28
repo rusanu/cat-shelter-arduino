@@ -867,7 +867,7 @@ void loadCameraConfigAtBoot() {
 // Check for camera config updates from S3 (called periodically)
 void checkCameraConfigUpdate() {
   // Only check if camera is available and WiFi connected
-  if (!cameraAvailable || !wifiConnected) {
+  if (!cameraAvailable || !IsWiFiConnected()) {
     return;
   }
 
@@ -1339,12 +1339,16 @@ void setupGPIO() {
   Serial.println("- FLASH_LED_PIN (GPIO4): OUTPUT");
 }
 
+bool readPIRSensor() {
+    int pirState = digitalRead(PIR_PIN);
+    return pirState == HIGH;
+}
+
 void checkPIRSensor() {
   unsigned long currentMillis = millis();
 
   // Read PIR sensor state
-  int pirState = digitalRead(PIR_PIN);
-  bool motionDetected = (pirState == HIGH);
+  bool motionDetected = readPIRSensor();
 
   // PIR HC-SR501 is a MOTION detector, not a PRESENCE sensor
   // Motion detection extends the presence timer (cat might be sleeping)
@@ -1498,10 +1502,37 @@ void updateBlanketControl() {
   }
 }
 
-void takeAndUploadPhoto(const char* reason) {
+bool uploadFbTimeS3(camera_fb_t* fb, struct tm& timeinfo)
+{
+  if (fb == nullptr) {
+    return false;
+  }
+
+  char buffer[64];
+  strftime(buffer, sizeof(buffer), "%Y%m%d_%H%M%S", &timeinfo);
+  String strTime(buffer);
+
+  String baseFilename = "cat_" + strTime;
+  String photoFilename = baseFilename + ".jpg";
+  String jsonFilename = baseFilename + ".json";
+
+  bool photoSuccess = uploadPhotoToS3(fb, photoFilename);
+  bool jsonSuccess = false;
+  if (photoSuccess) {
+    ImageAnalyzer analizer;
+    auto stats = analizer.analyze(fb);    
+    jsonSuccess = uploadStatusToS3(jsonFilename, stats);  
+  }
+
+  logPrintf(LOG_INFO, "Photo upload: %s [%d, %d]", baseFilename.c_str(), photoSuccess, jsonSuccess);
+
+  return photoSuccess;
+}
+
+bool takeAndUploadPhoto(const char* reason) {
   // Skip if camera not available (safe mode or camera failed)
-  if (!cameraAvailable) {
-    return;
+  if (!cameraAvailable || !IsWiFiConnected()) {
+    return false;
   }
 
   logPrintf(LOG_INFO, "Taking photo (%s)...", reason);
@@ -1511,12 +1542,14 @@ void takeAndUploadPhoto(const char* reason) {
   String photoFilename = baseFilename + ".jpg";
   String jsonFilename = baseFilename + ".json";
 
+  bool photoSuccess = false;
+
   camera_fb_t* fb = capturePhoto();
   if (fb) {
     ImageAnalyzer analizer;
     auto stats = analizer.analyze(fb);
 
-    bool photoSuccess = uploadPhotoToS3(fb, photoFilename);
+    photoSuccess = uploadPhotoToS3(fb, photoFilename);
     releasePhoto(fb);
 
     if (photoSuccess) {
@@ -1533,9 +1566,8 @@ void takeAndUploadPhoto(const char* reason) {
     } else {
       logPrint(LOG_WARNING, "Photo upload failed!");
     }
-
-    // WiFi remains connected (continuous power mode)
   }
+  return photoSuccess;
 }
 
 void checkPhotoSchedule() {
@@ -1636,12 +1668,9 @@ void handleSerialCommands() {
     }
     else if (command == "wifi strength") {
       // Check if WiFi is connected
-      if (!wifiConnected) {
-        Serial.println("WiFi not connected. Attempting to connect...");
-        if (!connectWiFi()) {
-          logPrint(LOG_ERROR, "Cannot monitor WiFi strength - connection failed");
-          return;
-        }
+      if (!WiFi.isConnected()) {
+        Serial.println("WiFi not connected.");
+        return;
       }
 
       Serial.println("\n=== WiFi Signal Strength Monitor ===");
@@ -1810,7 +1839,7 @@ String generateStatusJSON(const ImageQualityMetrics& stats) {
     json += "  },\n";
   }
 
-  json += "  \"wifi_connected\": " + String(wifiConnected ? "true" : "false") + ",\n";
+  json += "  \"wifi_connected\": " + String(WiFi.isConnected() ? "true" : "false") + ",\n";
   json += "  \"wifi_manual_override\": " + String(wifiManualOverride ? "true" : "false") + ",\n";
 
   // Memory status (for leak detection)
@@ -1877,9 +1906,9 @@ void printStatusReport(bool forceImmediate) {
       Serial.println();
     }
     if (wifiManualOverride) {
-      Serial.printf("WiFi: %s (MANUAL OVERRIDE)\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
+      Serial.printf("WiFi: %s (MANUAL OVERRIDE)\n", WiFi.isConnected() ? "CONNECTED" : "DISCONNECTED");
     } else {
-      Serial.printf("WiFi: %s (automatic)\n", wifiConnected ? "CONNECTED" : "DISCONNECTED");
+      Serial.printf("WiFi: %s (automatic)\n", WiFi.isConnected() ? "CONNECTED" : "DISCONNECTED");
     }
 
     // Memory status (for leak detection)

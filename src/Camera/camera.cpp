@@ -13,7 +13,6 @@
 #include "secrets.h"  // WiFi credentials (not in git)
 #include "common.h"
 
-
 #ifndef CAMERA
 #error "This file should only be included in the CAMERA environment"
 #endif
@@ -28,6 +27,7 @@ void setup() {
   logPrintf(LOG_INFO, "=== Cat Camera Controller Starting ===");
 
   setupWifi("CAMERA");
+  setupGPIO();
 
   cameraAvailable = initCamera();
   if (!cameraAvailable) {
@@ -40,13 +40,18 @@ void setup() {
   logPrintf(LOG_INFO, "=== Setup Complete ===");
 }
 
-
 void loop() {
-    if (!wifiConnected) {
+    if (!IsWiFiConnected()) {
         connectWiFi();
     }
-
-    if (cameraAction.CanAct()) {
-          logPrintf(LOG_INFO, "Camera action: %ld %ld", cameraAction.LastAct(), cameraAction.CurrentDelay());
+    else {
+      bool motion = readPIRSensor();
+      bool canAct = cameraAction.CanAct(), mustAct = cameraAction.MustAct();
+      if ((motion && canAct) || mustAct) {
+        logPrintf(LOG_INFO, "ACTION: %lu %d %d %d", cameraAction.CurrentDelay(), motion, canAct, mustAct);
+        if (takeAndUploadPhoto("Action")) {
+          cameraAction.MarkAct();
+        }
+      }
     }
 }

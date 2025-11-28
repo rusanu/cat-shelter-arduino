@@ -35,6 +35,14 @@ unsigned long lastConnectAttempt = 0;
 unsigned long lastSntpSync = 0;
 volatile bool hasSNTPTime = false;
 
+bool IsWiFiConnected() {
+    return wifiConnected && hasSNTPTime;
+}
+
+bool syncTimeWithNTP(int _) {
+    return hasSNTPTime;
+}
+
 void timeSyncCallback(struct timeval *tv) {
     time_t now = time(nullptr);
     if (now > 100000) {
@@ -42,9 +50,9 @@ void timeSyncCallback(struct timeval *tv) {
       gmtime_r(&now, &timeinfo);
       char buffer[64];
       strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S UTC", &timeinfo);
-      logPrintf(LOG_INFO, "SNTP Time synchronized: %s", buffer);
       lastSntpSync = millis();
       hasSNTPTime = true;
+      logPrintf(LOG_INFO, "SNTP Time synchronized: %s %d", buffer, (int)hasSNTPTime);
     } else {
       logPrintf(LOG_INFO, "SNTP Time callback but not synchronized");
     }
@@ -81,7 +89,7 @@ void setupWifi(const char* hostname) {
 
         WiFi.mode(WIFI_STA);
 
-        WiFi.setTxPower(WIFI_POWER_19_5dBm);
+        //WiFi.setTxPower(WIFI_POWER_19_5dBm);
         WiFi.setSleep(false);
         WiFi.setAutoReconnect(false);
         sntp_set_time_sync_notification_cb(timeSyncCallback);
@@ -150,7 +158,7 @@ bool connectWiFi() {
             if (WiFi.SSID(j) == String(KNOWN_NETWORKS[i].ssid)) {
                 int rssi = WiFi.RSSI(j);
                 wifi_auth_mode_t authMode = WiFi.encryptionType(j);
-                logPrintf(LOG_INFO, "FOUND (signal: %d dBm, authMode: %d)", rssi, authMode);
+                logPrintf(LOG_INFO, "FOUND %s (signal: %d dBm, authMode: %d)", WiFi.SSID(j).c_str(), rssi, authMode);
                 found = true;
 
                 // Select this network if it's the first one found or has better signal

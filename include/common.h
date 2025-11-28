@@ -54,29 +54,32 @@ class DebounceTimer {
       return _currentDelay;
     }
 
-    inline bool CanAct() {
+    inline bool CanAct() const {
       unsigned long now = millis();
       if (_lastAct + _currentDelay > now) {
         return false;
       };
+      return true;
+    }
+
+    inline bool MustAct() const {
+      unsigned long now = millis();
+      if (_lastAct + _maxAct > now) {
+        return false;
+      }      
+      return true;
+    }
+
+    inline void MarkAct() {
+      unsigned long now = millis();
       // Reset delay if cooldown has passed
       if (_lastAct + _cooldown < now) {
         _currentDelay = _minAct;
       }
       else {
         _currentDelay = max(_minAct, min(_currentDelay * 2, _maxDelay));
-      }
-      _lastAct = now;
-      return true;
-    }
-
-    inline bool MustAct() {
-      unsigned long now = millis();
-      if (_lastAct + _maxAct < now) {
-        return false;
       }      
       _lastAct = now;
-      return true;
     }
 };
 
@@ -143,9 +146,6 @@ enum LogLevel {
 
 // Logging macro - logPrint implemented as macro using logPrintf
 #define logPrint(level, msg) logPrintf(level, "%s", msg)
-
-extern volatile bool wifiConnected;
-extern volatile bool hasSNTPTime;
 
 // Camera configuration structure
 struct CameraConfig {
@@ -249,6 +249,7 @@ void setupWifi(const char* hostname);
 bool connectWiFi();
 void disconnectWiFi();
 bool syncTimeWithNTP(int maxRetries = 3);
+bool IsWiFiConnected();
 
 // S3 upload functions
 String getTimestamp();
@@ -257,6 +258,7 @@ bool uploadStatusToS3(const String& filename, const ImageQualityMetrics& stats);
 
 // GPIO and sensor functions
 void setupGPIO();
+bool readPIRSensor();
 void checkPIRSensor();
 void controlBlanket(bool shouldBeOn);
 void readDHT22();
@@ -267,7 +269,7 @@ float getEffectiveTemperature();
 
 // Control functions
 void updateBlanketControl();
-void takeAndUploadPhoto(const char* reason);
+bool takeAndUploadPhoto(const char* reason);
 void checkPhotoSchedule();
 
 // Serial command functions
