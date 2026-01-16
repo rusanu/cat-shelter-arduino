@@ -43,6 +43,27 @@
 #define DHT_TYPE DHT22
 DHT dht(DHT_PIN, DHT_TYPE);
 
+#ifdef DFR1154
+// DFR1154 OV3660 IR camera
+#define PWDN_GPIO_NUM     -1
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      5
+#define SIOD_GPIO_NUM      8
+#define SIOC_GPIO_NUM      9
+#define Y9_GPIO_NUM        4
+#define Y8_GPIO_NUM        6
+#define Y7_GPIO_NUM        7
+#define Y6_GPIO_NUM       14
+#define Y5_GPIO_NUM       17
+#define Y4_GPIO_NUM       21
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM       16
+#define VSYNC_GPIO_NUM     1
+#define HREF_GPIO_NUM      2
+#define PCLK_GPIO_NUM     15
+
+#else
+
 // ESP32-CAM AI Thinker Pin Configuration
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
@@ -60,6 +81,7 @@ DHT dht(DHT_PIN, DHT_TYPE);
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+#endif
 
 
 // Typical winter temperatures for Pitesti, Romania (December-February) by hour (in Celsius)
@@ -97,13 +119,16 @@ LogLevel currentLogLevel = LOG_INFO;
 
 float getChipTemperature()
 {
-  // Read raw temperature sensor value
+#ifdef CONFIG_IDF_TARGET_ESP32
+  // ESP32 classic chip has the temprature_sens_read() function
   uint8_t temp_raw = temprature_sens_read();
-  
-  // Convert to Celsius (approximation formula for ESP32)
   float temp_celsius = (temp_raw - 32) / 1.8;
-
   return temp_celsius;
+#else
+  // ESP32-S3 and newer chips don't have temprature_sens_read()
+  // Temperature monitoring is not critical, return placeholder
+  return 0.0f;
+#endif
 }
 
 // Read current camera configuration from sensor (hardware truth)
