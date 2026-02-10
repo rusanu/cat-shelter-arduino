@@ -35,6 +35,8 @@ extern "C" {
 // Camera configuration check interval
 #define CAMERA_CONFIG_CHECK_INTERVAL 3600000  // 60 minutes in milliseconds
 
+extern const char* deviceName; 
+
 /// @brief A class for debouncing timer with min and max guard (for motion detected trigger)
 class DebounceTimer {
   private:

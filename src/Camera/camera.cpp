@@ -12,6 +12,7 @@
 #include "image_analyzer.h"
 #include "secrets.h"  // WiFi credentials (not in git)
 #include "common.h"
+#include "aws_iot.h"
 
 #ifndef CAMERA
 #error "This file should only be included in the CAMERA environment"
@@ -26,7 +27,7 @@ void setup() {
 
   logPrintf(LOG_INFO, "=== Cat Camera Controller Starting ===");
 
-  setupWifi("CAMERA");
+  setupWifi(deviceName);
   setupGPIO();
 
   cameraAvailable = initCamera();
@@ -37,10 +38,14 @@ void setup() {
         rebootSystem("Camera init failed");
   }
 
+  setupAwsIot();
+
   logPrintf(LOG_INFO, "=== Setup Complete ===");
 }
 
 void loop() {
+    loopAwsIot();
+
     if (!IsWiFiConnected()) {
         connectWiFi();
     }

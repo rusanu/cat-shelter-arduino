@@ -98,7 +98,7 @@ void setupWifi(const char* hostname) {
         if (hostname) {
             uint64_t chipId = ESP.getEfuseMac();
             char chiphost[32+1];
-            snprintf(chiphost, 32, "ESP32CAM-%s-%04X%08X", hostname, chipId, (uint32_t)chipId);
+            snprintf(chiphost, 32, "ESP32CAM-%s-%08X", hostname, (uint32_t)chipId);
             logPrintf(LOG_INFO, "Hostname: %s", chiphost);
             WiFi.setHostname(chiphost);
         }

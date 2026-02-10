@@ -25,6 +25,9 @@
 #include "esp_wifi.h"
 #include "image_analyzer.h"
 #include "common.h"
+#include "aws_iot.h"
+
+const char* deviceName = "PATURA";
 
 void setup() {
   // Initialize serial communication for debugging
@@ -67,10 +70,10 @@ void setup() {
   setupGPIO();
 
   // Initialize DHT22 sensor
-  dht.begin();
+  dht->begin();
   Serial.println("DHT22 sensor initialized");
 
-  setupWifi("PATURA");
+  setupWifi(deviceName);
 
   // Connect WiFi temporarily to sync time
   if (connectWiFi()) {
@@ -109,6 +112,8 @@ void setup() {
     logPrint(LOG_INFO, "3. If camera still fails, check power supply and connections");
     logPrint(LOG_WARNING, "");
   }
+
+  setupAwsIot();
 
   Serial.println("=== Setup Complete ===\n");
 }
@@ -150,6 +155,9 @@ void loop() {
 
   // Handle serial commands
   handleSerialCommands();
+
+  // Process AWS IoT messages
+  loopAwsIot();
 
   // Check for cat presence
   checkPIRSensor();

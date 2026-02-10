@@ -1048,10 +1048,15 @@ bool initCamera() {
     config.frame_size = FRAMESIZE_UXGA;  // 1600x1200
     config.jpeg_quality = 10;
     config.fb_count = 2;
+
+    logPrintf(LOG_INFO, "PSRAM found: %d (%d)", ESP.getPsramSize(), ESP.getFreePsram());
+
   } else {
     config.frame_size = FRAMESIZE_SVGA;  // 800x600
     config.jpeg_quality = 12;
     config.fb_count = 1;
+
+        logPrintf(LOG_INFO, "No PSRAM");
   }
 
   // Initialize camera

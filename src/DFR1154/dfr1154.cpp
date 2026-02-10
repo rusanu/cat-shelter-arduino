@@ -12,9 +12,12 @@
 #include "secrets.h"  // WiFi credentials (not in git)
 #include "status_led.h"
 #include "common.h"
+#include "aws_iot.h"
 
 
 #ifdef DFR1154
+
+const char* deviceName = "DFR";
 
 static DebounceTimer cameraAction;
 static StatusLed statusLed(STATUS_LED_PIN);
@@ -42,7 +45,7 @@ void setup() {
 
   logPrintf(LOG_INFO, "=== Cat Camera Controller Starting ===");
 
-  setupWifi("DFR");
+  setupWifi(deviceName);
   setupGPIO();
 
   pinMode(STATUS_LED_PIN, OUTPUT);
@@ -60,12 +63,15 @@ void setup() {
 
   WiFi.onEvent(WiFiStatusCallback);
 
+  setupAwsIot();
+
   logPrintf(LOG_INFO, "=== Setup Complete ===");
 }
 
 
 void loop() {
     statusLed.Tick();
+    loopAwsIot();
 
     if (!IsWiFiConnected()) {
 
