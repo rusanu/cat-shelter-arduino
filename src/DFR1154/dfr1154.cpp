@@ -10,11 +10,30 @@
 #include "esp_wifi.h"
 #include "image_analyzer.h"
 #include "secrets.h"  // WiFi credentials (not in git)
+#include "status_led.h"
 #include "common.h"
+
 
 #ifdef DFR1154
 
 static DebounceTimer cameraAction;
+static StatusLed statusLed(STATUS_LED_PIN);
+
+void WiFiStatusCallback(WiFiEvent_t event, WiFiEventInfo_t info) {
+  
+  switch(event) {
+    case WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+      statusLed.Start(std::vector<int>{20, 180}, true);
+      break;
+
+    case WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED:
+      statusLed.Start(std::vector<int>{20, 180, 20, 180, 20, 180, 20, 1380}, true);
+      break;
+    case WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP:
+      statusLed.Start(std::vector<int>{200, 9800}, true);
+      break;
+  }
+}
 
 void setup() {
 
@@ -26,6 +45,9 @@ void setup() {
   setupWifi("DFR");
   setupGPIO();
 
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, LOW);
+
   cameraAvailable = initCamera();
   if (!cameraAvailable) {
         logPrintf(LOG_WARNING, "Camera initialization failed!");
@@ -34,19 +56,23 @@ void setup() {
         rebootSystem("Camera init failed");
   }
 
+  statusLed.Start(std::vector<int>{20, 180}, true);
+
+  WiFi.onEvent(WiFiStatusCallback);
+
   logPrintf(LOG_INFO, "=== Setup Complete ===");
 }
 
 
 void loop() {
+    statusLed.Tick();
+
     if (!IsWiFiConnected()) {
+
         connectWiFi();
     }
     else {
-      bool motion = true; //readPIRSensor();
-      bool canAct = cameraAction.CanAct(), mustAct = cameraAction.MustAct();
-      if ((motion && canAct) || mustAct) {
-        logPrintf(LOG_INFO, "ACTION: %lu %d %d %d", cameraAction.CurrentDelay(), motion, canAct, mustAct);
+      if (cameraAction.MustAct()) {
         if (takeAndUploadPhoto("Action")) {
           cameraAction.MarkAct();
         }

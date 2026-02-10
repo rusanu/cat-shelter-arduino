@@ -34,14 +34,21 @@
 #endif
 
 // GPIO Pin Definitions
-#define RELAY_PIN 12        // Relay control for heated blanket
-#define PIR_PIN 13          // PIR motion sensor (cat detection)
-#define DHT_PIN 14          // DHT22 temperature/humidity sensor
-#define FLASH_LED_PIN 4     // Built-in flash LED on ESP32-CAM
+#if !defined(RELAY_PIN)\
+  || !defined(PIR_PIN)\
+  || !defined(DHT_PIN)\
+  || !defined(FLASH_LED_PIN)
+#error "Initialize config pins in platform.io build_flags"
+#endif  
+
+//#define RELAY_PIN 12        // Relay control for heated blanket
+//#define PIR_PIN 13          // PIR motion sensor (cat detection)
+//#define DHT_PIN 14          // DHT22 temperature/humidity sensor
+//#define FLASH_LED_PIN 4     // Built-in flash LED on ESP32-CAM
 
 // DHT22 Configuration
 #define DHT_TYPE DHT22
-DHT dht(DHT_PIN, DHT_TYPE);
+DHT* dht = nullptr;
 
 #ifdef DFR1154
 // DFR1154 OV3660 IR camera
@@ -1347,21 +1354,31 @@ bool uploadStatusToS3(const String& filename, const ImageQualityMetrics& stats) 
 
 void setupGPIO() {
   // Configure relay pin as output
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW); // Start with blanket off
+  if (RELAY_PIN) {
+    pinMode(RELAY_PIN, OUTPUT);
+    digitalWrite(RELAY_PIN, LOW); // Start with blanket off
+  }
 
   // Configure PIR sensor pin as input
-  pinMode(PIR_PIN, INPUT);
+  if (PIR_PIN) {
+    pinMode(PIR_PIN, INPUT);
+  }
 
   // Configure flash LED pin as output
-  pinMode(FLASH_LED_PIN, OUTPUT);
-  digitalWrite(FLASH_LED_PIN, LOW); // Start with flash off
+  if (FLASH_LED_PIN) {
+    pinMode(FLASH_LED_PIN, OUTPUT);
+    digitalWrite(FLASH_LED_PIN, LOW); // Start with flash off
+  }
 
-  Serial.println("GPIO pins configured:");
-  Serial.println("- RELAY_PIN (GPIO12): OUTPUT");
-  Serial.println("- PIR_PIN (GPIO13): INPUT");
-  Serial.println("- DHT_PIN (GPIO14): DHT22 sensor");
-  Serial.println("- FLASH_LED_PIN (GPIO4): OUTPUT");
+  if (DHT_PIN) {
+    dht = new DHT(DHT_PIN, DHT22);
+  }
+
+  logPrintf(LOG_INFO, "GPIO pins configured:");
+  logPrintf(LOG_INFO, "- RELAY_PIN (%i): OUTPUT", RELAY_PIN);
+  logPrintf(LOG_INFO, "- PIR_PIN (%i): INPUT", PIR_PIN);
+  logPrintf(LOG_INFO, "- DHT_PIN (%i, %p): DHT22 sensor", DHT_PIN, dht);
+  logPrintf(LOG_INFO, "- FLASH_LED_PIN (%i): OUTPUT", FLASH_LED_PIN);
 }
 
 bool readPIRSensor() {
@@ -1410,6 +1427,11 @@ void controlBlanket(bool shouldBeOn) {
 }
 
 void readDHT22() {
+
+  if (dht == nullptr) {
+    return;
+  }
+
   unsigned long currentMillis = millis();
 
   // Check if it's time to read the sensor
@@ -1417,8 +1439,8 @@ void readDHT22() {
     lastDHTRead = currentMillis;
 
     // Read temperature and humidity
-    float temp = dht.readTemperature();
-    float humidity = dht.readHumidity();
+    float temp = dht->readTemperature();
+    float humidity = dht->readHumidity();
 
     // Check if readings are valid
     if (isnan(temp) || isnan(humidity)) {

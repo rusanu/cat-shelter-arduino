@@ -64,7 +64,7 @@ class DebounceTimer {
 
     inline bool MustAct() const {
       unsigned long now = millis();
-      if (_lastAct + _maxAct > now) {
+      if (_lastAct > 0 && _lastAct + _maxAct > now) {
         return false;
       }      
       return true;
@@ -175,7 +175,7 @@ struct CameraConfig {
 
 // External global variables
 extern LogLevel currentLogLevel;
-extern DHT dht;
+extern DHT* dht;
 extern bool catPresent;
 extern bool blanketOn;
 extern bool blanketManualOverride;
