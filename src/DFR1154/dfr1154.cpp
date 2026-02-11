@@ -13,6 +13,7 @@
 #include "status_led.h"
 #include "common.h"
 #include "aws_iot.h"
+#include "app_httpd.h"
 
 
 #ifdef DFR1154
@@ -65,11 +66,13 @@ void setup() {
 
   setupAwsIot();
 
+  InitHttpd();
+
   logPrintf(LOG_INFO, "=== Setup Complete ===");
 }
 
 
-void loop() {
+void loopCallback() {
     statusLed.Tick();
     loopAwsIot();
 
@@ -84,6 +87,10 @@ void loop() {
         }
       }
     }
+  }
+
+void loop() {
+    LoopHttpd(loopCallback);
 }
 
 #endif

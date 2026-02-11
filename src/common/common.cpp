@@ -1109,6 +1109,9 @@ void flashOff() {
 
 camera_fb_t* capturePhoto() {
    camera_fb_t* fb = nullptr;
+
+   sensor_t *s = esp_camera_sensor_get();
+  s->set_framesize(s, FRAMESIZE_UXGA);
    
   // force out the stale internal capture(s)
   for(int i=0;i<5;++i) {
