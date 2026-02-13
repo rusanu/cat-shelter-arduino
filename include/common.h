@@ -255,7 +255,7 @@ bool IsWiFiConnected();
 
 // S3 upload functions
 String getTimestamp();
-bool uploadPhotoToS3(camera_fb_t* fb, const String& filename);
+bool uploadPhotoToS3(camera_fb_t* fb, const String& filename, const String& folderName);
 bool uploadStatusToS3(const String& filename, const ImageQualityMetrics& stats);
 
 // GPIO and sensor functions

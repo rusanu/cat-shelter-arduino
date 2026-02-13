@@ -1108,9 +1108,9 @@ void flashOff() {
 }
 
 camera_fb_t* capturePhoto() {
-   camera_fb_t* fb = nullptr;
+  camera_fb_t* fb = nullptr;
 
-   sensor_t *s = esp_camera_sensor_get();
+  sensor_t *s = esp_camera_sensor_get();
   s->set_framesize(s, FRAMESIZE_UXGA);
    
   // force out the stale internal capture(s)
@@ -1162,7 +1162,7 @@ String getTimestamp() {
   return String(buffer);
 }
 
-bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
+bool uploadPhotoToS3(camera_fb_t* fb, const String& filename, const String& folderName) {
   if (!fb || fb->len == 0) {
     logPrint(LOG_ERROR, "Invalid photo buffer");
     return false;
@@ -1188,10 +1188,8 @@ bool uploadPhotoToS3(camera_fb_t* fb, const String& filename) {
   // Build S3 path with folder (if configured)
   String uri = "/";
   String logPath = "";
-  if (strlen(S3_FOLDER) > 0) {
-    uri += String(S3_FOLDER) + "/";
-    logPath = String(S3_FOLDER) + "/";
-  }
+  uri += folderName + "/";
+  logPath = folderName + "/";
   uri += filename;
   logPath += filename;
 
@@ -1571,7 +1569,7 @@ bool uploadFbTimeS3(camera_fb_t* fb, struct tm& timeinfo)
   String photoFilename = baseFilename + ".jpg";
   String jsonFilename = baseFilename + ".json";
 
-  bool photoSuccess = uploadPhotoToS3(fb, photoFilename);
+  bool photoSuccess = uploadPhotoToS3(fb, photoFilename, String(S3_FOLDER));
   bool jsonSuccess = false;
   if (photoSuccess) {
     ImageAnalyzer analizer;
@@ -1604,7 +1602,7 @@ bool takeAndUploadPhoto(const char* reason) {
     ImageAnalyzer analizer;
     auto stats = analizer.analyze(fb);
 
-    photoSuccess = uploadPhotoToS3(fb, photoFilename);
+    photoSuccess = uploadPhotoToS3(fb, photoFilename, String(S3_FOLDER));
     releasePhoto(fb);
 
     if (photoSuccess) {

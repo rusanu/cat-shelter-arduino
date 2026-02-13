@@ -4,6 +4,7 @@
 #include "common.h"
 #include "aws_iot.h"
 #include "secrets.h"
+#include "live_photo.h"
 
 // MQTT configuration
 #define MQTT_BUFFER_SIZE 1024
@@ -17,6 +18,8 @@ static String topicCommands;
 
 static String clientId;
 
+static LivePhoto livePhoto;
+
 // Module state
 static WiFiClientSecure tlsClient;
 static MQTTClient mqttClient(MQTT_BUFFER_SIZE);
@@ -29,10 +32,14 @@ static void onMqttMessage(String &topic, String &payload);
 static bool mqttConnect();
 static void handleIotCommand(const String &payload);
 
+String buildTopicName(const String& topic) {
+  return String("cat-shelter/") + deviceName + "/" + topic;
+}
+
 // ===== Public API =====
 
 void setupAwsIot() {
-  topicCommands = String("cat-shelter/") + deviceName + "/commands";
+  topicCommands = buildTopicName("commands");
 
   tlsClient.setCACert(AWS_IOT_ROOT_CA);
   tlsClient.setCertificate(AWS_IOT_DEVICE_CERT);
@@ -56,7 +63,9 @@ void loopAwsIot() {
     return;
   }
 
+  
   mqttClient.loop();
+  livePhoto.Loop();
 }
 
 bool isIotConnected() {
@@ -114,8 +123,11 @@ static void handleIotCommand(const String &payload) {
 
   if (strcmp(command, "snapshot") == 0) {
     if (cameraAvailable) {
-      bool ok = takeAndUploadPhoto("iot-command");
+      takeAndUploadPhoto("iot-command");
     }
+  }
+  else if (strcmp(command, "live-photo") == 0) {
+    livePhoto.Start();
   }
   else if (strcmp(command, "reboot") == 0) {
     rebootSystem("IoT reboot command");
@@ -125,3 +137,8 @@ static void handleIotCommand(const String &payload) {
   }
 }
 
+
+bool IoTPublish(const String& topic, const String& payload, bool retained, int qos) {
+  return  mqttClient.connected() &&
+    mqttClient.publish(topic, payload, retained, qos);
+}
