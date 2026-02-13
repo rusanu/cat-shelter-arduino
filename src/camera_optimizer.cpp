@@ -1,5 +1,5 @@
-#include "camera_optimizer.h"
 #include <Arduino.h>
+#include "camera_optimizer.h"
 
 extern camera_fb_t* capturePhoto();
 void releasePhoto(camera_fb_t* fb);

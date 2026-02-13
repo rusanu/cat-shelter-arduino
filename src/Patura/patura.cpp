@@ -156,9 +156,6 @@ void loop() {
   // Handle serial commands
   handleSerialCommands();
 
-  // Process AWS IoT messages
-  loopAwsIot();
-
   // Check for cat presence
   checkPIRSensor();
 
@@ -170,6 +167,9 @@ void loop() {
 
   // Check if it's time to take and upload a photo
   checkPhotoSchedule();
+  
+  // Process AWS IoT messages
+  loopAwsIot();
 
   // Check for camera config updates from S3 (every 60 minutes)
   if ((currentMillis - lastCameraConfigCheck) >= CAMERA_CONFIG_CHECK_INTERVAL) {

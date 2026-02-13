@@ -18,6 +18,8 @@
 #error "This file should only be included in the CAMERA environment"
 #endif
 
+const char* deviceName = "CAMERA";
+
 static DebounceTimer cameraAction;
 
 void setup() {
