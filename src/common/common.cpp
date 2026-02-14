@@ -28,10 +28,7 @@
 
 #include "common.h"
 
-// Default S3 folder if not defined in secrets.h (backward compatibility)
-#ifndef S3_FOLDER
-#define S3_FOLDER ""  // Empty string = root folder
-#endif
+const char * s3Folder = nullptr;
 
 // GPIO Pin Definitions
 #if !defined(RELAY_PIN)\
@@ -651,11 +648,7 @@ bool downloadFromS3(const String& filename, String& content, String& etag, Strin
   }
 
   // Build S3 path with folder (if configured)
-  String uri = "/";
-  if (strlen(S3_FOLDER) > 0) {
-    uri += String(S3_FOLDER) + "/";
-  }
-  uri += filename;
+  String uri = String("/") + s3Folder + "/" + filename;
 
   String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
   String url = "https://" + host + uri;
@@ -751,11 +744,7 @@ bool uploadJSONToS3(const String& jsonContent, const String& filename) {
   }
 
   // Build S3 path with folder (if configured)
-  String uri = "/";
-  if (strlen(S3_FOLDER) > 0) {
-    uri += String(S3_FOLDER) + "/";
-  }
-  uri += filename;
+  String uri = String("/") + s3Folder + "/" + filename;
 
   String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
   String url = "https://" + host + uri;
@@ -1293,15 +1282,9 @@ bool uploadStatusToS3(const String& filename, const ImageQualityMetrics& stats) 
   size_t payload_len = statusJSON.length();
 
   // Build S3 path with folder (if configured, same as photo)
-  String uri = "/";
-  String logPath = "";
-  if (strlen(S3_FOLDER) > 0) {
-    uri += String(S3_FOLDER) + "/";
-    logPath = String(S3_FOLDER) + "/";
-  }
-  uri += filename;
-  logPath += filename;
-
+  String uri = String("/") + s3Folder + "/" + filename;
+  String logPath = String(s3Folder) + "/" + filename;
+  
   String host = String(S3_BUCKET) + ".s3." + AWS_REGION + ".amazonaws.com";
   String url = "https://" + host + uri;
 
@@ -1569,7 +1552,7 @@ bool uploadFbTimeS3(camera_fb_t* fb, struct tm& timeinfo)
   String photoFilename = baseFilename + ".jpg";
   String jsonFilename = baseFilename + ".json";
 
-  bool photoSuccess = uploadPhotoToS3(fb, photoFilename, String(S3_FOLDER));
+  bool photoSuccess = uploadPhotoToS3(fb, photoFilename, String(s3Folder));
   bool jsonSuccess = false;
   if (photoSuccess) {
     ImageAnalyzer analizer;
@@ -1602,7 +1585,7 @@ bool takeAndUploadPhoto(const char* reason) {
     ImageAnalyzer analizer;
     auto stats = analizer.analyze(fb);
 
-    photoSuccess = uploadPhotoToS3(fb, photoFilename, String(S3_FOLDER));
+    photoSuccess = uploadPhotoToS3(fb, photoFilename, String(s3Folder));
     releasePhoto(fb);
 
     if (photoSuccess) {

@@ -68,6 +68,13 @@ void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
 
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
     logPrintf(LOG_INFO, "WiFi connected. AuthMode:%d Signal strength:%d dBm", info.wifi_sta_connected.authmode, WiFi.RSSI());
+
+    for (int i = 0; i<KNOWN_NETWORKS_COUNT; ++i) {
+        if (WiFi.SSID() == KNOWN_NETWORKS[i].ssid) {
+            s3Folder = KNOWN_NETWORKS[i].s3Folder;
+            logPrintf(LOG_INFO, "Using S3 Folder: %s on SSID: %s", s3Folder, WiFi.SSID().c_str());
+        }
+    }
 }
 
 void WiFiStationGotIP(WiFiEvent_t event, WiFiEventInfo_t info) {
