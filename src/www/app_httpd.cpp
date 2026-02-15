@@ -55,7 +55,7 @@ void sendStreamFrame() {
     else
     {
         sensor_t *s = esp_camera_sensor_get();
-        s->set_framesize(s, FRAMESIZE_SVGA);
+        s->set_framesize(s, FRAMESIZE_VGA);
         s->set_pixformat(s, PIXFORMAT_JPEG);
         camera_fb_t * fb = esp_camera_fb_get();
         if (fb) {

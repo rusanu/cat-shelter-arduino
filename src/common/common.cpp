@@ -1101,6 +1101,7 @@ camera_fb_t* capturePhoto() {
 
   sensor_t *s = esp_camera_sensor_get();
   s->set_framesize(s, FRAMESIZE_UXGA);
+  s->set_vflip(s, 1);
    
   // force out the stale internal capture(s)
   for(int i=0;i<5;++i) {
@@ -1798,36 +1799,44 @@ String generateStatusJSON(const ImageQualityMetrics& stats) {
 
   // Generate JSON manually (no complex libraries needed)
   String json = "{\n";
+  json += "  \"device\": \"" + String(deviceName) + "\",\n";
   json += "  \"timestamp\": \"" + String(timestamp) + "\",\n";
   json += "  \"uptime_seconds\": " + String(currentMillis / 1000) + ",\n";
   json += "  \"mode\": \"" + String(safeMode ? "SAFE_MODE" : "NORMAL") + "\",\n";
   json += "  \"boot_attempts\": " + String(bootAttempts) + ",\n";
   json += "  \"max_boot_attempts\": " + String(MAX_BOOT_ATTEMPTS) + ",\n";
-  json += "  \"temperature_celsius\": " + String(currentTemp, 1) + ",\n";
-  json += "  \"humidity_percent\": " + String(currentHumidity, 1) + ",\n";
-  json += "  \"dht22_sensor_working\": " + String(dhtSensorWorking ? "true" : "false") + ",\n";
+  if (DHT_PIN != 0) {
+    json += "  \"temperature_celsius\": " + String(currentTemp, 1) + ",\n";
+    json += "  \"humidity_percent\": " + String(currentHumidity, 1) + ",\n";
+    json += "  \"dht22_sensor_working\": " + String(dhtSensorWorking ? "true" : "false") + ",\n";
 
-  // Add effective temperature and expected temperature
-  float effectiveTemp = getEffectiveTemperature();
-  float expectedTemp = getExpectedTemperature();
-  json += "  \"effective_temperature_celsius\": " + String(effectiveTemp, 1) + ",\n";
-  json += "  \"expected_temperature_celsius\": " + String(expectedTemp, 1) + ",\n";
-  json += "  \"using_fallback_temperature\": " + String((effectiveTemp != currentTemp) ? "true" : "false") + ",\n";
+    // Add effective temperature and expected temperature
+    float effectiveTemp = getEffectiveTemperature();
+    float expectedTemp = getExpectedTemperature();
+    json += "  \"effective_temperature_celsius\": " + String(effectiveTemp, 1) + ",\n";
+    json += "  \"expected_temperature_celsius\": " + String(expectedTemp, 1) + ",\n";
+    json += "  \"using_fallback_temperature\": " + String((effectiveTemp != currentTemp) ? "true" : "false") + ",\n";
+  }
 
-  json += "  \"cat_present\": " + String(catPresent ? "true" : "false") + ",\n";
+  if (PIR_PIN != 0) {
+    json += "  \"cat_present\": " + String(catPresent ? "true" : "false") + ",\n";
 
-  // Cat presence timing info (PIR motion-based with timeout)
-  if (lastMotionDetected > 0) {
-    unsigned long timeSinceMotion = currentMillis - lastMotionDetected;
-    json += "  \"seconds_since_last_motion\": " + String(timeSinceMotion / 1000) + ",\n";
-    if (catPresent) {
-      unsigned long timeUntilTimeout = CAT_PRESENCE_TIMEOUT - timeSinceMotion;
-      json += "  \"presence_timeout_seconds\": " + String(timeUntilTimeout / 1000) + ",\n";
+    // Cat presence timing info (PIR motion-based with timeout)
+    if (lastMotionDetected > 0) {
+      unsigned long timeSinceMotion = currentMillis - lastMotionDetected;
+      json += "  \"seconds_since_last_motion\": " + String(timeSinceMotion / 1000) + ",\n";
+      if (catPresent) {
+        unsigned long timeUntilTimeout = CAT_PRESENCE_TIMEOUT - timeSinceMotion;
+        json += "  \"presence_timeout_seconds\": " + String(timeUntilTimeout / 1000) + ",\n";
+      }
     }
   }
 
-  json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
-  json += "  \"blanket_manual_override\": " + String(blanketManualOverride ? "true" : "false") + ",\n";
+  if (RELAY_PIN != 0) {
+    json += "  \"blanket_on\": " + String(blanketOn ? "true" : "false") + ",\n";
+    json += "  \"blanket_manual_override\": " + String(blanketManualOverride ? "true" : "false") + ",\n";
+  }
+
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
   json += "  \"camera_config_source\": \"" + cameraConfigSource + "\",\n";
   if (cameraConfigETag.length() > 0) {
@@ -1876,6 +1885,10 @@ String generateStatusJSON(const ImageQualityMetrics& stats) {
   }
 
   json += "  \"wifi_connected\": " + String(WiFi.isConnected() ? "true" : "false") + ",\n";
+  if (WiFi.isConnected()) {
+    json += "  \"wifi_ssid\": \"" + String(WiFi.SSID().c_str()) + "\",\n";
+    json += "  \"wifi_rssi\": \"" + String(WiFi.RSSI()) + "\",\n";
+  }
   json += "  \"wifi_manual_override\": " + String(wifiManualOverride ? "true" : "false") + ",\n";
 
   // Memory status (for leak detection)
