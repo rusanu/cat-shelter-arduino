@@ -25,7 +25,8 @@
 #include "esp_wifi.h"
 #include "image_analyzer.h"
 #include "secrets.h"  // WiFi credentials (not in git)
-
+#include "json_config.h"
+#include "aws_iot.h"
 #include "common.h"
 
 const char * s3Folder = nullptr;
@@ -135,360 +136,6 @@ float getChipTemperature()
 #endif
 }
 
-// Read current camera configuration from sensor (hardware truth)
-CameraConfig readCurrentCameraConfig() {
-  CameraConfig config;
-  sensor_t* s = esp_camera_sensor_get();
-
-  if (!s) {
-    logPrint(LOG_ERROR, "Failed to get camera sensor for reading config");
-    // Return empty config if sensor unavailable
-    memset(&config, 0, sizeof(config));
-    return config;
-  }
-
-  // Read actual sensor values
-  config.brightness = s->status.brightness;
-  config.contrast = s->status.contrast;
-  config.saturation = s->status.saturation;
-  config.special_effect = s->status.special_effect;
-  config.whitebal = s->status.awb;
-  config.awb_gain = s->status.awb_gain;
-  config.wb_mode = s->status.wb_mode;
-  config.exposure_ctrl = s->status.aec;
-  config.aec2 = s->status.aec2;
-  config.ae_level = s->status.ae_level;
-  config.aec_value = s->status.aec_value;
-  config.gain_ctrl = s->status.agc;
-  config.agc_gain = s->status.agc_gain;
-  config.gainceiling = s->status.gainceiling;
-  config.bpc = s->status.bpc;
-  config.wpc = s->status.wpc;
-  config.raw_gma = s->status.raw_gma;
-  config.lenc = s->status.lenc;
-  config.hmirror = s->status.hmirror;
-  config.vflip = s->status.vflip;
-  config.dcw = s->status.dcw;
-  config.colorbar = s->status.colorbar;
-
-  return config;
-}
-
-// Get default camera configuration (read from sensor's initial state)
-CameraConfig getDefaultCameraConfig() {
-  // Default means "use sensor's own defaults" - just read current values
-  return readCurrentCameraConfig();
-}
-
-// Validate camera configuration values are in valid ranges
-bool validateCameraConfig(const CameraConfig& config, String& errorMsg) {
-  if (config.brightness < -2 || config.brightness > 2) {
-    errorMsg = "brightness must be -2 to 2";
-    return false;
-  }
-  if (config.contrast < -2 || config.contrast > 2) {
-    errorMsg = "contrast must be -2 to 2";
-    return false;
-  }
-  if (config.saturation < -2 || config.saturation > 2) {
-    errorMsg = "saturation must be -2 to 2";
-    return false;
-  }
-  if (config.special_effect > 6) {
-    errorMsg = "special_effect must be 0 to 6";
-    return false;
-  }
-  if (config.wb_mode > 4) {
-    errorMsg = "wb_mode must be 0 to 4";
-    return false;
-  }
-  if (config.ae_level < -2 || config.ae_level > 2) {
-    errorMsg = "ae_level must be -2 to 2";
-    return false;
-  }
-  if (config.aec_value > 1200) {
-    errorMsg = "aec_value must be 0 to 1200";
-    return false;
-  }
-  if (config.agc_gain > 30) {
-    errorMsg = "agc_gain must be 0 to 30";
-    return false;
-  }
-  if (config.gainceiling > 6) {
-    errorMsg = "gainceiling must be 0 to 6";
-    return false;
-  }
-  return true;
-}
-
-// Apply camera configuration to the camera sensor
-bool applyCameraConfig(const CameraConfig& config) {
-  sensor_t* s = esp_camera_sensor_get();
-  if (!s) {
-    logPrint(LOG_ERROR, "Failed to get camera sensor");
-    return false;
-  }
-
-  s->set_brightness(s, config.brightness);
-  s->set_contrast(s, config.contrast);
-  s->set_saturation(s, config.saturation);
-  s->set_special_effect(s, config.special_effect);
-  s->set_whitebal(s, config.whitebal ? 1 : 0);
-  s->set_awb_gain(s, config.awb_gain ? 1 : 0);
-  s->set_wb_mode(s, config.wb_mode);
-  s->set_exposure_ctrl(s, config.exposure_ctrl ? 1 : 0);
-  s->set_aec2(s, config.aec2 ? 1 : 0);
-  s->set_ae_level(s, config.ae_level);
-  s->set_aec_value(s, config.aec_value);
-  s->set_gain_ctrl(s, config.gain_ctrl ? 1 : 0);
-  s->set_agc_gain(s, config.agc_gain);
-  s->set_gainceiling(s, (gainceiling_t)config.gainceiling);
-  s->set_bpc(s, config.bpc ? 1 : 0);
-  s->set_wpc(s, config.wpc ? 1 : 0);
-  s->set_raw_gma(s, config.raw_gma ? 1 : 0);
-  s->set_lenc(s, config.lenc ? 1 : 0);
-  s->set_hmirror(s, config.hmirror ? 1 : 0);
-  s->set_vflip(s, config.vflip ? 1 : 0);
-  s->set_dcw(s, config.dcw ? 1 : 0);
-  s->set_colorbar(s, config.colorbar ? 1 : 0);
-
-  logPrint(LOG_INFO, "Camera configuration applied successfully");
-  return true;
-}
-
-// Serialize camera config to JSON string
-String configToJSON(const CameraConfig& config) {
-  JsonDocument doc;
-
-  doc["brightness"] = config.brightness;
-  doc["contrast"] = config.contrast;
-  doc["saturation"] = config.saturation;
-  doc["special_effect"] = config.special_effect;
-  doc["whitebal"] = config.whitebal;
-  doc["awb_gain"] = config.awb_gain;
-  doc["wb_mode"] = config.wb_mode;
-  doc["exposure_ctrl"] = config.exposure_ctrl;
-  doc["aec2"] = config.aec2;
-  doc["ae_level"] = config.ae_level;
-  doc["aec_value"] = config.aec_value;
-  doc["gain_ctrl"] = config.gain_ctrl;
-  doc["agc_gain"] = config.agc_gain;
-  doc["gainceiling"] = config.gainceiling;
-  doc["bpc"] = config.bpc;
-  doc["wpc"] = config.wpc;
-  doc["raw_gma"] = config.raw_gma;
-  doc["lenc"] = config.lenc;
-  doc["hmirror"] = config.hmirror;
-  doc["vflip"] = config.vflip;
-  doc["dcw"] = config.dcw;
-  doc["colorbar"] = config.colorbar;
-
-  String output;
-  serializeJson(doc, output);
-  return output;
-}
-
-// Deserialize JSON string to camera config
-bool configFromJSON(const String& jsonStr, CameraConfig& config, String& errorMsg) {
-  JsonDocument doc;
-
-  DeserializationError error = deserializeJson(doc, jsonStr);
-  if (error) {
-    errorMsg = "JSON parse error: ";
-    errorMsg += error.c_str();
-    return false;
-  }
-
-  // Parse all fields with type checking
-  if (!doc["brightness"].is<int>()) {
-    errorMsg = "Missing or invalid 'brightness' field";
-    return false;
-  }
-  config.brightness = doc["brightness"];
-
-  if (!doc["contrast"].is<int>()) {
-    errorMsg = "Missing or invalid 'contrast' field";
-    return false;
-  }
-  config.contrast = doc["contrast"];
-
-  if (!doc["saturation"].is<int>()) {
-    errorMsg = "Missing or invalid 'saturation' field";
-    return false;
-  }
-  config.saturation = doc["saturation"];
-
-  if (!doc["special_effect"].is<int>()) {
-    errorMsg = "Missing or invalid 'special_effect' field";
-    return false;
-  }
-  config.special_effect = doc["special_effect"];
-
-  if (!doc["whitebal"].is<bool>()) {
-    errorMsg = "Missing or invalid 'whitebal' field";
-    return false;
-  }
-  config.whitebal = doc["whitebal"];
-
-  if (!doc["awb_gain"].is<bool>()) {
-    errorMsg = "Missing or invalid 'awb_gain' field";
-    return false;
-  }
-  config.awb_gain = doc["awb_gain"];
-
-  if (!doc["wb_mode"].is<int>()) {
-    errorMsg = "Missing or invalid 'wb_mode' field";
-    return false;
-  }
-  config.wb_mode = doc["wb_mode"];
-
-  if (!doc["exposure_ctrl"].is<bool>()) {
-    errorMsg = "Missing or invalid 'exposure_ctrl' field";
-    return false;
-  }
-  config.exposure_ctrl = doc["exposure_ctrl"];
-
-  if (!doc["aec2"].is<bool>()) {
-    errorMsg = "Missing or invalid 'aec2' field";
-    return false;
-  }
-  config.aec2 = doc["aec2"];
-
-  if (!doc["ae_level"].is<int>()) {
-    errorMsg = "Missing or invalid 'ae_level' field";
-    return false;
-  }
-  config.ae_level = doc["ae_level"];
-
-  if (!doc["aec_value"].is<int>()) {
-    errorMsg = "Missing or invalid 'aec_value' field";
-    return false;
-  }
-  config.aec_value = doc["aec_value"];
-
-  if (!doc["gain_ctrl"].is<bool>()) {
-    errorMsg = "Missing or invalid 'gain_ctrl' field";
-    return false;
-  }
-  config.gain_ctrl = doc["gain_ctrl"];
-
-  if (!doc["agc_gain"].is<int>()) {
-    errorMsg = "Missing or invalid 'agc_gain' field";
-    return false;
-  }
-  config.agc_gain = doc["agc_gain"];
-
-  if (!doc["gainceiling"].is<int>()) {
-    errorMsg = "Missing or invalid 'gainceiling' field";
-    return false;
-  }
-  config.gainceiling = doc["gainceiling"];
-
-  if (!doc["bpc"].is<bool>()) {
-    errorMsg = "Missing or invalid 'bpc' field";
-    return false;
-  }
-  config.bpc = doc["bpc"];
-
-  if (!doc["wpc"].is<bool>()) {
-    errorMsg = "Missing or invalid 'wpc' field";
-    return false;
-  }
-  config.wpc = doc["wpc"];
-
-  if (!doc["raw_gma"].is<bool>()) {
-    errorMsg = "Missing or invalid 'raw_gma' field";
-    return false;
-  }
-  config.raw_gma = doc["raw_gma"];
-
-  if (!doc["lenc"].is<bool>()) {
-    errorMsg = "Missing or invalid 'lenc' field";
-    return false;
-  }
-  config.lenc = doc["lenc"];
-
-  if (!doc["hmirror"].is<bool>()) {
-    errorMsg = "Missing or invalid 'hmirror' field";
-    return false;
-  }
-  config.hmirror = doc["hmirror"];
-
-  if (!doc["vflip"].is<bool>()) {
-    errorMsg = "Missing or invalid 'vflip' field";
-    return false;
-  }
-  config.vflip = doc["vflip"];
-
-  if (!doc["dcw"].is<bool>()) {
-    errorMsg = "Missing or invalid 'dcw' field";
-    return false;
-  }
-  config.dcw = doc["dcw"];
-
-  if (!doc["colorbar"].is<bool>()) {
-    errorMsg = "Missing or invalid 'colorbar' field";
-    return false;
-  }
-  config.colorbar = doc["colorbar"];
-
-  // Validate the parsed config
-  if (!validateCameraConfig(config, errorMsg)) {
-    return false;
-  }
-
-  return true;
-}
-
-// Save camera config to NVM (non-volatile memory) with ETag
-bool saveConfigToNVM(const CameraConfig& config, const String& etag) {
-  Preferences prefs;
-  prefs.begin("cam-config", false);
-
-  // Serialize config to JSON
-  String jsonStr = configToJSON(config);
-
-  // Save JSON string and ETag
-  bool success = true;
-  success &= prefs.putString("config", jsonStr);
-  success &= prefs.putString("etag", etag);
-
-  prefs.end();
-
-  if (success) {
-    logPrintf(LOG_INFO, "Camera config saved to NVM (etag: %s)", etag.c_str());
-  } else {
-    logPrint(LOG_ERROR, "Failed to save camera config to NVM");
-  }
-
-  return success;
-}
-
-// Load camera config from NVM with ETag
-bool loadConfigFromNVM(CameraConfig& config, String& etag, String& errorMsg) {
-  Preferences prefs;
-  prefs.begin("cam-config", true);  // Read-only mode
-
-  String jsonStr = prefs.getString("config", "");
-  etag = prefs.getString("etag", "");
-
-  prefs.end();
-
-  if (jsonStr.isEmpty()) {
-    errorMsg = "No camera config found in NVM";
-    return false;
-  }
-
-  // Deserialize JSON
-  if (!configFromJSON(jsonStr, config, errorMsg)) {
-    logPrintf(LOG_ERROR, "Failed to parse NVM config: %s", errorMsg.c_str());
-    return false;
-  }
-
-  logPrintf(LOG_INFO, "Camera config loaded from NVM (etag: %s)", etag.c_str());
-  return true;
-}
-
 // Global state variables
 bool catPresent = false;
 bool blanketOn = false;
@@ -511,12 +158,6 @@ bool cameraAvailable = false;
 int bootAttempts = 0;
 unsigned long bootStartTime = 0;
 unsigned long lastSafeModeRecoveryAttempt = 0;  // Track recovery attempts in safe mode
-
-// Camera configuration state
-CameraConfig currentCameraConfig;
-String cameraConfigSource = "default";  // "default", "nvm", or "s3"
-String cameraConfigETag = "";  // ETag of the config currently in use
-unsigned long lastCameraConfigCheck = 0;  // Track last time we checked S3 for config updates
 
 // Logging functions
 void logPrintf(LogLevel level, const char* format, ...) {
@@ -788,181 +429,6 @@ bool uploadJSONToS3(const String& jsonContent, const String& filename) {
   }
 }
 
-// Load camera configuration at boot with cascade: S3 → NVM → defaults
-void loadCameraConfigAtBoot() {
-  logPrint(LOG_INFO, "Loading camera configuration...");
-
-  CameraConfig config;
-  String etag;
-  String errorMsg;
-  bool configLoaded = false;
-
-  // Step 1: Try to load from S3 (camera.json)
-  String s3Content;
-  String s3ETag;
-  if (downloadFromS3("camera.json", s3Content, s3ETag, errorMsg)) {
-    // S3 download successful - check if it's newer than NVM
-    String nvmETag;
-    CameraConfig nvmConfig;
-    String nvmError;
-
-    bool nvmExists = loadConfigFromNVM(nvmConfig, nvmETag, nvmError);
-
-    if (!nvmExists || s3ETag != nvmETag) {
-      // S3 is new or different from NVM - try to parse it
-      if (configFromJSON(s3Content, config, errorMsg)) {
-        logPrintf(LOG_INFO, "Loaded camera config from S3 (ETag: %s)", s3ETag.c_str());
-        cameraConfigSource = "s3";
-        cameraConfigETag = s3ETag;
-        configLoaded = true;
-
-        // Save to NVM for future use
-        saveConfigToNVM(config, s3ETag);
-      } else {
-        logPrintf(LOG_ERROR, "S3 config parse error: %s", errorMsg.c_str());
-        // Fall through to try NVM
-      }
-    } else {
-      logPrintf(LOG_INFO, "S3 config unchanged (ETag: %s), using NVM", s3ETag.c_str());
-      config = nvmConfig;
-      cameraConfigSource = "s3-cached";
-      cameraConfigETag = nvmETag;
-      configLoaded = true;
-    }
-  } else {
-    // Check if it's 404 (intentional deletion = reset) vs error (temporary problem)
-    if (errorMsg == "File not found (404)") {
-      logPrint(LOG_INFO, "camera.json not found in S3 - clearing NVM cache and using defaults");
-      // Clear NVM cache
-      Preferences prefs;
-      prefs.begin("cam-config", false);
-      prefs.clear();
-      prefs.end();
-      // Skip NVM, go straight to defaults (configLoaded stays false)
-    } else {
-      logPrintf(LOG_DEBUG, "S3 config not available: %s", errorMsg.c_str());
-      // Temporary error - try NVM in Step 2
-    }
-  }
-
-  // Step 2: If S3 failed (but not 404), try NVM
-  if (!configLoaded) {
-    if (loadConfigFromNVM(config, etag, errorMsg)) {
-      logPrintf(LOG_INFO, "Loaded camera config from NVM (ETag: %s)", etag.c_str());
-      cameraConfigSource = "s3-cached";
-      cameraConfigETag = etag;
-      configLoaded = true;
-    } else {
-      logPrintf(LOG_DEBUG, "NVM config not available: %s", errorMsg.c_str());
-    }
-  }
-
-  // Step 3: If both failed, use defaults
-  if (!configLoaded) {
-    config = getDefaultCameraConfig();
-    logPrint(LOG_INFO, "Using default camera configuration");
-    cameraConfigSource = "default";
-    cameraConfigETag = "";
-  }
-
-  // Apply the configuration (unless using defaults, which means don't modify sensor)
-  if (cameraAvailable && configLoaded) {
-    if (!applyCameraConfig(config)) {
-      logPrint(LOG_ERROR, "Failed to apply camera configuration");
-    }
-  }
-
-  // Read back actual sensor values (hardware truth) and upload as camera.use.json
-  if (cameraAvailable) {
-    CameraConfig actualConfig = readCurrentCameraConfig();
-    currentCameraConfig = actualConfig;
-
-    String useJSON = configToJSON(actualConfig);
-    uploadJSONToS3(useJSON, "camera.use.json");
-  } else {
-    // Camera not available - just store what we have
-    currentCameraConfig = config;
-  }
-}
-
-// Check for camera config updates from S3 (called periodically)
-void checkCameraConfigUpdate() {
-  // Only check if camera is available and WiFi connected
-  if (!cameraAvailable || !IsWiFiConnected()) {
-    return;
-  }
-
-  logPrint(LOG_DEBUG, "Checking S3 for camera config updates...");
-
-  String s3Content;
-  String s3ETag;
-  String errorMsg;
-
-  if (downloadFromS3("camera.json", s3Content, s3ETag, errorMsg)) {
-    // Check if ETag changed
-    if (s3ETag != cameraConfigETag) {
-      logPrintf(LOG_INFO, "New camera config detected (ETag: %s -> %s)",
-                cameraConfigETag.c_str(), s3ETag.c_str());
-
-      // Try to parse new config
-      CameraConfig newConfig;
-      if (configFromJSON(s3Content, newConfig, errorMsg)) {
-        // Apply new configuration
-        if (applyCameraConfig(newConfig)) {
-          logPrint(LOG_INFO, "New camera configuration applied successfully");
-
-          // Update state
-          cameraConfigSource = "s3";
-          cameraConfigETag = s3ETag;
-
-          // Save to NVM
-          saveConfigToNVM(newConfig, s3ETag);
-
-          // Read back actual hardware values and upload
-          CameraConfig actualConfig = readCurrentCameraConfig();
-          currentCameraConfig = actualConfig;
-
-          String useJSON = configToJSON(actualConfig);
-          uploadJSONToS3(useJSON, "camera.use.json");
-        } else {
-          logPrint(LOG_ERROR, "Failed to apply new camera configuration");
-        }
-      } else {
-        logPrintf(LOG_ERROR, "Invalid camera config from S3: %s", errorMsg.c_str());
-      }
-    } else {
-      logPrint(LOG_DEBUG, "Camera config unchanged");
-    }
-  } else {
-    // Check if it's 404 (intentional deletion = reset) vs error (temporary problem)
-    if (errorMsg == "File not found (404)") {
-      logPrint(LOG_INFO, "camera.json deleted from S3 - clearing NVM cache and resetting to defaults");
-
-      // Clear NVM cache
-      Preferences prefs;
-      prefs.begin("cam-config", false);
-      prefs.clear();
-      prefs.end();
-
-      // Read current sensor defaults (don't modify sensor)
-      CameraConfig defaultConfig = readCurrentCameraConfig();
-      currentCameraConfig = defaultConfig;
-
-      // Update state
-      cameraConfigSource = "default";
-      cameraConfigETag = "";
-
-      // Upload actual sensor state
-      String useJSON = configToJSON(defaultConfig);
-      uploadJSONToS3(useJSON, "camera.use.json");
-
-      logPrint(LOG_INFO, "Camera reset to defaults complete");
-    } else {
-      logPrintf(LOG_DEBUG, "Camera config check failed: %s", errorMsg.c_str());
-      // Temporary error - keep current config
-    }
-  }
-}
 
 // ===== End AWS Signature V4 Functions =====
 
@@ -1034,7 +500,7 @@ bool initCamera() {
 
   // Frame size and quality settings
   if (psramFound()) {
-    config.frame_size = FRAMESIZE_UXGA;  // 1600x1200
+    config.frame_size = FRAMESIZE_SVGA;  //  FRAMESIZE_UXGA;  // 1600x1200
     config.jpeg_quality = 10;
     config.fb_count = 2;
 
@@ -1055,36 +521,6 @@ bool initCamera() {
     return false;
   }
 
-  // Apply physical mounting correction - camera is mounted upside down
-  sensor_t* s = esp_camera_sensor_get();
-  if (s) {
-    s->set_vflip(s, 1);  // Flip vertically for upside-down mounting
-    s->set_hmirror(s, 1); // Flip horizontally for on-site mounting position
-    Serial.println("Camera initialized successfully (vflip applied for mounting)");
-  } else {
-    Serial.println("Camera initialized successfully (warning: could not apply vflip)");
-  }
-
-  // Prime frame buffers to clear garbage/uninitialized data
-  // With fb_count=2 (PSRAM mode), both buffers need to be cleared once at boot
-  if (psramFound()) {
-    Serial.println("Priming 2-frame buffers (clearing garbage data)...");
-
-    // Discard first garbage frame
-    camera_fb_t* fb1 = esp_camera_fb_get();
-    if (fb1) {
-      esp_camera_fb_return(fb1);
-    }
-
-    // Discard second garbage frame
-    camera_fb_t* fb2 = esp_camera_fb_get();
-    if (fb2) {
-      esp_camera_fb_return(fb2);
-    }
-
-    Serial.println("Frame buffers primed");
-  }
-
   return true;
 }
 
@@ -1099,10 +535,9 @@ void flashOff() {
 camera_fb_t* capturePhoto() {
   camera_fb_t* fb = nullptr;
 
-  sensor_t *s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_UXGA);
-  s->set_vflip(s, 1);
-   
+  //sensor_t *s = esp_camera_sensor_get();
+  //s->set_framesize(s, FRAMESIZE_UXGA);
+
   // force out the stale internal capture(s)
   for(int i=0;i<5;++i) {
     fb = esp_camera_fb_get();
@@ -1129,6 +564,11 @@ camera_fb_t* capturePhoto() {
 
   if (!fb) {
     logPrint(LOG_ERROR, "Camera capture failed");
+    JsonDocument doc;
+    doc["device"] = deviceName;
+    doc["timestamp"] = getTimestamp();
+    doc["error"] = "Camera capture failed";
+    IoTPublish(buildTopicName("status"), doc, false, 0);
     return nullptr;
   }
 
@@ -1838,10 +1278,6 @@ String generateStatusJSON(const ImageQualityMetrics& stats) {
   }
 
   json += "  \"camera_available\": " + String(cameraAvailable ? "true" : "false") + ",\n";
-  json += "  \"camera_config_source\": \"" + cameraConfigSource + "\",\n";
-  if (cameraConfigETag.length() > 0) {
-    json += "  \"camera_config_etag\": \"" + cameraConfigETag + "\",\n";
-  }
 
   json+= "  \"image_quality_metrics\": {\n"
       "    \"brightness\": " + String(stats.brightness) +",\n"
@@ -1854,35 +1290,6 @@ String generateStatusJSON(const ImageQualityMetrics& stats) {
       "    \"sharpness\": " + String(stats.sharpness) +",\n"
       "    \"underexposure\": " + String(stats.underexposure) +"\n"
     "  },\n";
-
-  // Add current camera sensor values (hardware truth at time of photo)
-  if (cameraAvailable) {
-    CameraConfig actualConfig = readCurrentCameraConfig();
-    json += "  \"camera_config\": {\n";
-    json += "    \"brightness\": " + String(actualConfig.brightness) + ",\n";
-    json += "    \"contrast\": " + String(actualConfig.contrast) + ",\n";
-    json += "    \"saturation\": " + String(actualConfig.saturation) + ",\n";
-    json += "    \"special_effect\": " + String(actualConfig.special_effect) + ",\n";
-    json += "    \"whitebal\": " + String(actualConfig.whitebal ? "true" : "false") + ",\n";
-    json += "    \"awb_gain\": " + String(actualConfig.awb_gain ? "true" : "false") + ",\n";
-    json += "    \"wb_mode\": " + String(actualConfig.wb_mode) + ",\n";
-    json += "    \"exposure_ctrl\": " + String(actualConfig.exposure_ctrl ? "true" : "false") + ",\n";
-    json += "    \"aec2\": " + String(actualConfig.aec2 ? "true" : "false") + ",\n";
-    json += "    \"ae_level\": " + String(actualConfig.ae_level) + ",\n";
-    json += "    \"aec_value\": " + String(actualConfig.aec_value) + ",\n";
-    json += "    \"gain_ctrl\": " + String(actualConfig.gain_ctrl ? "true" : "false") + ",\n";
-    json += "    \"agc_gain\": " + String(actualConfig.agc_gain) + ",\n";
-    json += "    \"gainceiling\": " + String(actualConfig.gainceiling) + ",\n";
-    json += "    \"bpc\": " + String(actualConfig.bpc ? "true" : "false") + ",\n";
-    json += "    \"wpc\": " + String(actualConfig.wpc ? "true" : "false") + ",\n";
-    json += "    \"raw_gma\": " + String(actualConfig.raw_gma ? "true" : "false") + ",\n";
-    json += "    \"lenc\": " + String(actualConfig.lenc ? "true" : "false") + ",\n";
-    json += "    \"hmirror\": " + String(actualConfig.hmirror ? "true" : "false") + ",\n";
-    json += "    \"vflip\": " + String(actualConfig.vflip ? "true" : "false") + ",\n";
-    json += "    \"dcw\": " + String(actualConfig.dcw ? "true" : "false") + ",\n";
-    json += "    \"colorbar\": " + String(actualConfig.colorbar ? "true" : "false") + "\n";
-    json += "  },\n";
-  }
 
   json += "  \"wifi_connected\": " + String(WiFi.isConnected() ? "true" : "false") + ",\n";
   if (WiFi.isConnected()) {
@@ -1947,13 +1354,6 @@ void printStatusReport(bool forceImmediate) {
       Serial.printf("Blanket: %s (automatic)\n", blanketOn ? "ON" : "OFF");
     }
     Serial.printf("Camera: %s\n", cameraAvailable ? "AVAILABLE" : "DISABLED");
-    if (cameraAvailable) {
-      Serial.printf("Camera Config: %s", cameraConfigSource.c_str());
-      if (cameraConfigETag.length() > 0) {
-        Serial.printf(" (ETag: %s)", cameraConfigETag.c_str());
-      }
-      Serial.println();
-    }
     if (wifiManualOverride) {
       Serial.printf("WiFi: %s (MANUAL OVERRIDE)\n", WiFi.isConnected() ? "CONNECTED" : "DISCONNECTED");
     } else {

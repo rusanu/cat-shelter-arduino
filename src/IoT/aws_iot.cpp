@@ -5,6 +5,7 @@
 #include "aws_iot.h"
 #include "secrets.h"
 #include "live_photo.h"
+#include "json_config.h"
 
 // MQTT configuration
 #define MQTT_BUFFER_SIZE 1024
@@ -90,6 +91,14 @@ static bool mqttConnect() {
 
   mqttClient.subscribe(topicCommands, 1);
   logPrintf(LOG_INFO, "MQTT subscribed to %s", topicCommands.c_str());
+
+  JsonDocument doc;
+  doc["device"] = deviceName;
+  doc["timestamp"] = getTimestamp();
+  doc["SSID"] = WiFi.SSID();
+  doc["RSSI"] = WiFi.RSSI();
+
+  IoTPublish(buildTopicName("ready"), doc, false, 0);
   return true;
 }
 
@@ -132,6 +141,13 @@ static void handleIotCommand(const String &payload) {
   else if (strcmp(command, "reboot") == 0) {
     rebootSystem("IoT reboot command");
   }
+  else if (strcmp(command, "get-configuration") == 0) {
+    IoTPublish(buildTopicName("config"), JsonCameraConfig::config.buildConfigurationDocument(), false, 0);
+  }
+  else if (strcmp(command, "set-configuration") == 0) {
+    JsonCameraConfig::config.readCameraConfiguration(doc);
+    IoTPublish(buildTopicName("config"), JsonCameraConfig::config.buildConfigurationDocument(), false, 0);
+  }
   else {
     logPrintf(LOG_WARNING, "Unknown IoT command: %s", command);
   }
@@ -141,4 +157,10 @@ static void handleIotCommand(const String &payload) {
 bool IoTPublish(const String& topic, const String& payload, bool retained, int qos) {
   return  mqttClient.connected() &&
     mqttClient.publish(topic, payload, retained, qos);
+}
+
+bool IoTPublish(const String& topic, const JsonDocument& payload, bool retained, int qos) {
+  String serialized;
+  serializeJson(payload, serialized);
+  return  IoTPublish(topic, serialized, retained, qos);
 }

@@ -14,6 +14,7 @@
 #include "common.h"
 #include "aws_iot.h"
 #include "app_httpd.h"
+#include "json_config.h"
 
 
 #ifdef DFR1154
@@ -59,6 +60,15 @@ void setup() {
         delay(2000);
         rebootSystem("Camera init failed");
   }
+
+  sensor_t* s = esp_camera_sensor_get();
+  s->set_framesize(s, FRAMESIZE_SVGA);
+  s->set_exposure_ctrl(s, 1);
+  s->set_aec2(s, 2);
+  s->set_ae_level(s, 2);
+
+  JsonCameraConfig::config.ReadNVM();
+  JsonCameraConfig::config.Apply();
 
   statusLed.Start(std::vector<int>{20, 180}, true);
 

@@ -1,6 +1,8 @@
 #include <WebServer.h>
+#include <ArduinoJson.h>
 #include "common.h"
 #include "app_httpd.h"
+#include "json_config.h"
 
 
 static int portNumber = 80;
@@ -54,14 +56,11 @@ void sendStreamFrame() {
     }
     else
     {
-        sensor_t *s = esp_camera_sensor_get();
-        s->set_framesize(s, FRAMESIZE_VGA);
-        s->set_pixformat(s, PIXFORMAT_JPEG);
         camera_fb_t * fb = esp_camera_fb_get();
         if (fb) {
             client.printf("--" MJPEG_BOUNDARY "\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", fb->len);
             client.write(fb->buf, fb->len);
-            client.println("\r\n");            
+            client.println("\r\n");
             esp_camera_fb_return(fb);
         }
     }

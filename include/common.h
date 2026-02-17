@@ -150,32 +150,6 @@ enum LogLevel {
 // Logging macro - logPrint implemented as macro using logPrintf
 #define logPrint(level, msg) logPrintf(level, "%s", msg)
 
-// Camera configuration structure
-struct CameraConfig {
-  int8_t brightness;      // -2 to 2
-  int8_t contrast;        // -2 to 2
-  int8_t saturation;      // -2 to 2
-  uint8_t special_effect; // 0-6 (0=None, 1=Negative, 2=Grayscale, 3=Red, 4=Green, 5=Blue, 6=Sepia)
-  bool whitebal;          // White balance enable
-  bool awb_gain;          // Auto white balance gain enable
-  uint8_t wb_mode;        // 0-4 (0=Auto, 1=Sunny, 2=Cloudy, 3=Office, 4=Home)
-  bool exposure_ctrl;     // Auto exposure control enable
-  bool aec2;              // AEC2 enable
-  int8_t ae_level;        // -2 to 2
-  uint16_t aec_value;     // 0 to 1200
-  bool gain_ctrl;         // Auto gain control enable
-  uint8_t agc_gain;       // 0 to 30
-  uint8_t gainceiling;    // 0 to 6
-  bool bpc;               // Black pixel correction enable
-  bool wpc;               // White pixel correction enable
-  bool raw_gma;           // Raw gamma enable
-  bool lenc;              // Lens correction enable
-  bool hmirror;           // Horizontal mirror
-  bool vflip;             // Vertical flip
-  bool dcw;               // Downsize enable
-  bool colorbar;          // Color bar test pattern enable
-};
-
 // External global variables
 extern LogLevel currentLogLevel;
 extern DHT* dht;
@@ -199,27 +173,11 @@ extern bool cameraAvailable;
 extern int bootAttempts;
 extern unsigned long bootStartTime;
 extern unsigned long lastSafeModeRecoveryAttempt;
-extern CameraConfig currentCameraConfig;
-extern String cameraConfigSource;
-extern String cameraConfigETag;
-extern unsigned long lastCameraConfigCheck;
 
 // Function declarations
 
 // Temperature functions
 float getChipTemperature();
-
-// Camera configuration functions
-CameraConfig readCurrentCameraConfig();
-CameraConfig getDefaultCameraConfig();
-bool validateCameraConfig(const CameraConfig& config, String& errorMsg);
-bool applyCameraConfig(const CameraConfig& config);
-String configToJSON(const CameraConfig& config);
-bool configFromJSON(const String& jsonStr, CameraConfig& config, String& errorMsg);
-bool saveConfigToNVM(const CameraConfig& config, const String& etag);
-bool loadConfigFromNVM(CameraConfig& config, String& etag, String& errorMsg);
-void loadCameraConfigAtBoot();
-void checkCameraConfigUpdate();
 
 // Logging functions
 void logPrintf(LogLevel level, const char* format, ...);
