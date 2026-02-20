@@ -15,6 +15,7 @@
 #include "aws_iot.h"
 #include "app_httpd.h"
 #include "json_config.h"
+#include "ambient.h"
 
 
 #ifdef DFR1154
@@ -62,10 +63,9 @@ void setup() {
   }
 
   sensor_t* s = esp_camera_sensor_get();
-  s->set_framesize(s, FRAMESIZE_SVGA);
   s->set_exposure_ctrl(s, 1);
-  s->set_aec2(s, 2);
-  s->set_ae_level(s, 2);
+  s->set_aec2(s, 0);
+  //s->set_ae_level(s, 0);
 
   JsonCameraConfig::config.ReadNVM();
   JsonCameraConfig::config.Apply();
@@ -76,7 +76,9 @@ void setup() {
 
   setupAwsIot();
 
-  InitHttpd();
+//  InitHttpd();
+
+  Ambient::ltr.setup();
 
   logPrintf(LOG_INFO, "=== Setup Complete ===");
 }
@@ -85,6 +87,8 @@ void setup() {
 void loopCallback() {
     statusLed.Tick();
     loopAwsIot();
+
+    Ambient::ltr.loop();
 
     if (!IsWiFiConnected()) {
 
@@ -100,7 +104,8 @@ void loopCallback() {
   }
 
 void loop() {
-    LoopHttpd(loopCallback);
+  loopCallback();
+    //LoopHttpd(loopCallback);
 }
 
 #endif

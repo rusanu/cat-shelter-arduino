@@ -27,6 +27,7 @@
 #include "secrets.h"  // WiFi credentials (not in git)
 #include "json_config.h"
 #include "aws_iot.h"
+#include "ambient.h"
 #include "common.h"
 
 const char * s3Folder = nullptr;
@@ -476,7 +477,8 @@ void rebootSystem(const char* reason) {
 }
 
 bool initCamera() {
-  camera_config_t config;
+  camera_config_t config = {0};
+
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
   config.pin_d0 = Y2_GPIO_NUM;
@@ -500,9 +502,10 @@ bool initCamera() {
 
   // Frame size and quality settings
   if (psramFound()) {
-    config.frame_size = FRAMESIZE_SVGA;  //  FRAMESIZE_UXGA;  // 1600x1200
+    config.frame_size = FRAMESIZE_UXGA;  // 1600x1200
     config.jpeg_quality = 10;
     config.fb_count = 2;
+    config.fb_location = CAMERA_FB_IN_PSRAM;
 
     logPrintf(LOG_INFO, "PSRAM found: %d (%d)", ESP.getPsramSize(), ESP.getFreePsram());
 
@@ -511,7 +514,7 @@ bool initCamera() {
     config.jpeg_quality = 12;
     config.fb_count = 1;
 
-        logPrintf(LOG_INFO, "No PSRAM");
+    logPrintf(LOG_INFO, "No PSRAM");
   }
 
   // Initialize camera
@@ -532,11 +535,36 @@ void flashOff() {
   digitalWrite(FLASH_LED_PIN, LOW);
 }
 
+static int aeCorrection = 0;
+
 camera_fb_t* capturePhoto() {
   camera_fb_t* fb = nullptr;
 
-  //sensor_t *s = esp_camera_sensor_get();
-  //s->set_framesize(s, FRAMESIZE_UXGA);
+  sensor_t *s = esp_camera_sensor_get();
+
+  switch(Ambient::ltr.getCondition()) {
+    case Ambient::Bright:
+      aeCorrection = -2;
+      break;
+    case Ambient::Light:
+      aeCorrection = -1;
+      break;
+    case Ambient::Dark:
+      aeCorrection = 1;
+      break;
+    case Ambient::Night:
+    aeCorrection = 2;
+      break;
+    case Ambient::Unknown:
+      break;
+  }
+
+  // Turn on flash
+  flashOn();
+  logPrint(LOG_DEBUG, "Flash ON");
+
+  int gRet = s->set_gain_ctrl(s, 0);
+  int aeRet = s->set_ae_level(s, aeCorrection);
 
   // force out the stale internal capture(s)
   for(int i=0;i<5;++i) {
@@ -544,15 +572,10 @@ camera_fb_t* capturePhoto() {
     if (fb) {
       esp_camera_fb_return(fb);
       fb = nullptr;
+      delay(50);
     }
   }
   
-  // Turn on flash
-  flashOn();
-  logPrint(LOG_DEBUG, "Flash ON");
-
-  // Delay for camera sensors to adjust to lighting
-  delay(200);
 
   // Capture photo
   // Note: Frame buffers are primed once at boot in initCamera()
@@ -572,7 +595,7 @@ camera_fb_t* capturePhoto() {
     return nullptr;
   }
 
-  logPrintf(LOG_INFO, "Photo captured: %d bytes", fb->len);
+  logPrintf(LOG_INFO, "Photo captured: %d bytes [ae:%i ret:%i gret: %i]", fb->len, aeCorrection, aeRet, gRet);
   return fb;
 }
 
@@ -1245,6 +1268,8 @@ String generateStatusJSON(const ImageQualityMetrics& stats) {
   json += "  \"mode\": \"" + String(safeMode ? "SAFE_MODE" : "NORMAL") + "\",\n";
   json += "  \"boot_attempts\": " + String(bootAttempts) + ",\n";
   json += "  \"max_boot_attempts\": " + String(MAX_BOOT_ATTEMPTS) + ",\n";
+  json += "  \"lux\": " + String(Ambient::ltr.getLux()) + ",\n";
+  json += "  \"ae_level\": " + String(aeCorrection) + ",\n";
   if (DHT_PIN != 0) {
     json += "  \"temperature_celsius\": " + String(currentTemp, 1) + ",\n";
     json += "  \"humidity_percent\": " + String(currentHumidity, 1) + ",\n";

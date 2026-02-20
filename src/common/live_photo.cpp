@@ -3,6 +3,7 @@
 #include "live_photo.h"
 #include "aws_iot.h"
 #include "secrets.h"
+#include "ambient.h"
 #include "json_config.h"
 
 #define LIVEPHOTO_STREAM_MAX_MS 5*60*1000
@@ -31,10 +32,8 @@ void LivePhoto::Loop() {
 
     if (cameraAvailable && 
         (_lastPhotoMs == 0 || now - _lastPhotoMs >= LIVEPHOTO_STREAM_FPS_MS)) {
-        flashOn();
 
-        camera_fb_t *fb = esp_camera_fb_get();
-        flashOff();
+        camera_fb_t *fb = capturePhoto();
         if (fb) {
             // Generate base filename with timestamp (without extension)
             String baseFilename = "cat_" + getTimestamp();
@@ -46,6 +45,7 @@ void LivePhoto::Loop() {
                 JsonDocument doc;
                 doc["id"] = String(S3_LIVE_PHOTO) + "/" + photoFilename;
                 doc["status"] = JsonCameraConfig::config.BuildStatus();
+                doc["ltr"] = Ambient::ltr.describe();
                 IoTPublish(topicName, doc, false, 0);
             }
 
