@@ -13,6 +13,7 @@
 #include "secrets.h"  // WiFi credentials (not in git)
 #include "common.h"
 #include "aws_iot.h"
+#include "offline_reboot.h"
 
 #ifndef CAMERA
 #error "This file should only be included in the CAMERA environment"
@@ -21,6 +22,8 @@
 const char* deviceName = "CAMERA";
 
 static DebounceTimer cameraAction;
+
+static OfflineReboot offlineReboot(OFFLINE_REBOOT_INTERVAL);
 
 void setup() {
 
@@ -43,15 +46,21 @@ void setup() {
   setupAwsIot();
 
   logPrintf(LOG_INFO, "=== Setup Complete ===");
+
+  // Start the baseline for comparison
+  offlineReboot.Reset();
 }
 
 void loop() {
+    unsigned long now = millis();
     loopAwsIot();
 
     if (!IsWiFiConnected()) {
-        connectWiFi();
+      !offlineReboot.Check(true);
+      connectWiFi();
     }
     else {
+      offlineReboot.Reset();
       bool motion = readPIRSensor();
       bool canAct = cameraAction.CanAct(), mustAct = cameraAction.MustAct();
       if ((motion && canAct) || mustAct) {

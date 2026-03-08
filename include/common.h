@@ -21,6 +21,9 @@ extern "C" {
 #define BLANKET_MIN_STATE_TIME 300000  // 5 minutes minimum time before blanket can change state
 #define CAT_PRESENCE_TIMEOUT 3600000   // 60 minutes - PIR motion extends presence (PIR is motion, not presence)
 #define WIFI_RETRY_CONNECT 30000 // 30s between WiFi connect attempts
+#define SNTP_NORMAL_INTERVAL 3600000 // 1h SNTP sync once time is set
+#define SNTP_START_INTERVAL 15000 // 15s SNTP sync to obtain the first time
+#define OFFLINE_REBOOT_INTERVAL 15*60*1000 // 15m reboot if not connected
 
 // Temperature threshold for blanket control (in Celsius)
 #define TEMP_COLD_THRESHOLD 13.0  // Turn on blanket if temp is below this and cat present

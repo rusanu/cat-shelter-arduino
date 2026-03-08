@@ -34,6 +34,9 @@ unsigned long lastConnectTime = 0;
 unsigned long lastConnectAttempt = 0;
 unsigned long lastSntpSync = 0;
 volatile bool hasSNTPTime = false;
+volatile uint32_t sntpInterval = SNTP_START_INTERVAL;
+
+unsigned long lastOnline = 0;
 
 bool IsWiFiConnected() {
     return wifiConnected && hasSNTPTime;
@@ -52,6 +55,9 @@ void timeSyncCallback(struct timeval *tv) {
       strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S UTC", &timeinfo);
       lastSntpSync = millis();
       hasSNTPTime = true;
+      // switch to long intervals once we obtain the clock at least once
+      sntpInterval = SNTP_NORMAL_INTERVAL;
+      esp_sntp_set_sync_interval(sntpInterval);
       logPrintf(LOG_INFO, "SNTP Time synchronized: %s %d", buffer, (int)hasSNTPTime);
     } else {
       logPrintf(LOG_INFO, "SNTP Time callback but not synchronized");
@@ -60,6 +66,7 @@ void timeSyncCallback(struct timeval *tv) {
 
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info) {
     logPrintf(LOG_INFO, "WiFi disconnected. Reason: %d", info.wifi_sta_disconnected.reason);
+    esp_sntp_stop();
     
     _wifiState = EWiFiState::Disconnected;
     wifiConnected = false;
@@ -80,6 +87,9 @@ void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
 void WiFiStationGotIP(WiFiEvent_t event, WiFiEventInfo_t info) {
     logPrintf(LOG_INFO, "WiFi got IP. Address:%s", WiFi.localIP().toString().c_str());
 
+    esp_sntp_set_sync_interval(sntpInterval);
+    sntp_set_time_sync_notification_cb(timeSyncCallback);
+
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
     
     _wifiState = EWiFiState::Connected;
@@ -99,8 +109,6 @@ void setupWifi(const char* hostname) {
         //WiFi.setTxPower(WIFI_POWER_19_5dBm);
         WiFi.setSleep(false);
         WiFi.setAutoReconnect(false);
-        sntp_set_time_sync_notification_cb(timeSyncCallback);
-        hasSNTPTime = false;
 
         if (hostname) {
             uint64_t chipId = ESP.getEfuseMac();
@@ -115,8 +123,12 @@ void setupWifi(const char* hostname) {
 
 bool connectWiFi() {
 
-    if (wifiConnected) {
+    if (wifiConnected && hasSNTPTime) {
         return true;
+    }
+
+    if (wifiConnected && !hasSNTPTime) {
+        return false;
     }
 
     if (_wifiState == EWiFiState::Connecting) {
